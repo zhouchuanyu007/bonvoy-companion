@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AMap services test</title>
+  </head>
+  <body>
+    <script>
+      window.__serviceResult = null;
+      window.__serviceError = null;
+    </script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=YOUR_AMAP_KEY&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Driving"></script>
+    <script>
+      AMap.plugin(["AMap.PlaceSearch", "AMap.Geocoder", "AMap.Driving"], function () {
+        try {
+          const geocoder = new AMap.Geocoder({ city: "全国" });
+          const placeSearch = new AMap.PlaceSearch({
+            city: "南京市",
+            citylimit: true,
+            pageSize: 8,
+            pageIndex: 1
+          });
+          geocoder.getLocation("上海", function (status, result) {
+            if (status !== "complete" || !result.geocodes.length) {
+              window.__serviceError = "geocode:" + status;
+              return;
+            }
+            const origin = result.geocodes[0].location;
+            placeSearch.search("景点", function (searchStatus, searchResult) {
+              if (searchStatus !== "complete") {
+                window.__serviceError = "places:" + searchStatus;
+                return;
+              }
+              window.__serviceResult = {
+                origin: [origin.lng, origin.lat],
+                places: (searchResult.poiList.pois || []).slice(0, 5).map((poi) => ({
+                  name: poi.name,
+                  location: [poi.location.lng, poi.location.lat],
+                  address: poi.address
+                }))
+              };
+            });
+          });
+        } catch (error) {
+          window.__serviceError = String(error && error.stack || error);
+        }
+      });
+    </script>
+  </body>
+</html>

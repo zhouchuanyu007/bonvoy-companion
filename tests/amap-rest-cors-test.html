@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <body>
+    <script>
+      window.__restResult = null;
+      window.__restError = null;
+      fetch(
+        "https://restapi.amap.com/v3/geocode/geo?address=%E5%8D%97%E4%BA%AC&key=YOUR_AMAP_KEY"
+      )
+        .then(async (response) => {
+          window.__restResult = {
+            status: response.status,
+            cors: response.headers.get("access-control-allow-origin"),
+            body: await response.json()
+          };
+        })
+        .catch((error) => {
+          window.__restError = String(error && error.message || error);
+        });
+    </script>
+  </body>
+</html>

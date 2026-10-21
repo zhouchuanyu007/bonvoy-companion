@@ -1,0 +1,27 @@
+# Generated build output
+/build/
+/app/build/
+/.gradle/
+/dist/
+
+# Local machine configuration and development environment
+/local-env/
+/tooling/
+/signing/
+/local.properties
+/secrets.properties
+.env
+.env.*
+*.jks
+*.keystore
+
+# IDE and editor state
+/.idea/
+/.vscode/
+*.iml
+*.swp
+
+# Logs and OS metadata
+*.log
+Thumbs.db
+.DS_Store
