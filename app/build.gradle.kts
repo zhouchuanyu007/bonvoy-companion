@@ -26,8 +26,14 @@ fun javaStringLiteral(value: String): String = buildString {
 }
 
 val localSecrets = readLocalProperties(rootProject.file("local-env/secrets.properties"))
+val keylessBuild =
+    System.getenv("BONVOY_KEYLESS_BUILD")
+        ?.trim()
+        ?.lowercase()
+        ?.let { it == "1" || it == "true" || it == "yes" } == true
 
 fun localSecret(name: String): String {
+    if (keylessBuild) return ""
     val environmentValue = System.getenv(name)?.trim().orEmpty()
     if (environmentValue.isNotEmpty()) return environmentValue
     return localSecrets.getProperty(name, "").trim()
@@ -49,6 +55,7 @@ android {
         targetSdk = 35
         versionCode = 13
         versionName = "0.12.1"
+        buildConfigField("boolean", "KEYLESS_BUILD", keylessBuild.toString())
         buildConfigField("String", "AMAP_KEY", javaStringLiteral(localSecret("AMAP_KEY")))
         buildConfigField("String", "DEEPSEEK_KEY", javaStringLiteral(localSecret("DEEPSEEK_KEY")))
         buildConfigField("String", "FLYAI_API_KEY", javaStringLiteral(localSecret("FLYAI_API_KEY")))

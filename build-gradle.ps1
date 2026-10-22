@@ -44,6 +44,8 @@ $signedSource = Join-Path $releaseDir "app-release.apk"
 $unsignedSource = Join-Path $releaseDir "app-release-unsigned.apk"
 $distDir = Join-Path $root "dist"
 $versionName = "0.12.1"
+$keylessBuild = $env:BONVOY_KEYLESS_BUILD -eq "1"
+$artifactSuffix = if ($keylessBuild) { "-keyless" } else { "" }
 
 $javaExecutable = if ($javaHome) {
     Join-Path $javaHome "bin\java.exe"
@@ -83,7 +85,12 @@ $env:PATH = (
 
 Push-Location $root
 try {
-    & $gradle "--no-daemon" ":app:assembleRelease"
+    $gradleTasks = if ($keylessBuild) {
+        @("--no-daemon", ":app:clean", ":app:assembleRelease")
+    } else {
+        @("--no-daemon", ":app:assembleRelease")
+    }
+    & $gradle @gradleTasks
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle 构建失败"
     }
@@ -96,7 +103,9 @@ try {
 
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
     $suffix = if ($signed) { "" } else { "-unsigned" }
-    $apkDestination = Join-Path $distDir ("BonvoyCompanion-{0}{1}.apk" -f $versionName, $suffix)
+    $apkDestination = Join-Path $distDir (
+        "BonvoyCompanion-{0}{1}{2}.apk" -f $versionName, $artifactSuffix, $suffix
+    )
     Copy-Item -LiteralPath $sourceApk -Destination $apkDestination -Force
 
     if ($signed) {

@@ -33,7 +33,7 @@
 - 优先使用官方接口、合作方授权数据或允许使用的数据源；不以绕过登录、验证码、反爬或会员权限的方式取得数据。
 - 本 App 为非官方个人工具，不代表或隶属于万豪国际集团；公开发布前需重新评估商标、数据授权和隐私合规。
 
-详细需求、功能优先级和数据可行性见 [V2 需求清单](docs/requirements-v2.md)、[飞猪联网接入说明](docs/flyai-integration.md)、[酒店详情数据说明](docs/hotel-detail-data.md)、[初版产品需求池](docs/product-brief.md) 与 [数据与合规说明](docs/data-and-compliance.md)。
+详细需求、功能优先级和数据可行性见 [V2 需求清单](docs/requirements-v2.md)、[飞猪联网接入说明](docs/flyai-integration.md)、[酒店详情数据说明](docs/hotel-detail-data.md)、[后端代理与密钥迁移指南](docs/backend-proxy.md)、[初版产品需求池](docs/product-brief.md) 与 [数据与合规说明](docs/data-and-compliance.md)。
 
 ## 当前可运行版本
 

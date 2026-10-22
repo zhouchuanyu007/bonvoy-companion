@@ -843,6 +843,11 @@ public class MainActivity extends Activity {
         public String getAmapKey() {
             return AMAP_KEY;
         }
+
+        @JavascriptInterface
+        public boolean isKeylessBuild() {
+            return BuildConfig.KEYLESS_BUILD;
+        }
     }
 
     private class AmapApiBridge {

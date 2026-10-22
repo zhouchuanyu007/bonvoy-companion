@@ -19,6 +19,11 @@
       : "") ||
     window.BONVOY_AMAP_KEY ||
     "";
+  const KEYLESS_BUILD = Boolean(
+    window.AndroidConfig &&
+      typeof window.AndroidConfig.isKeylessBuild === "function" &&
+      window.AndroidConfig.isKeylessBuild()
+  );
   const MAP_ADDRESS_RADIUS_KM = 12;
   const DEFAULT_PREFS = {
     departure: "上海",
@@ -1826,7 +1831,9 @@
       "</span>" +
       "</button>" +
       '<div class="header-actions">' +
-      '<span class="data-mode-pill">全国酒店目录</span>' +
+      '<span class="data-mode-pill">' +
+      (KEYLESS_BUILD ? "离线无密钥版" : "全国酒店目录") +
+      "</span>" +
       '<button class="icon-button" data-action="open-settings" aria-label="打开设置" title="出行偏好">' +
       icon("settings") +
       "</button>" +
@@ -6844,7 +6851,11 @@
           (entry) => Object.keys((entry && entry.facilities) || {}).length
         ).length +
         " 家酒店的房型、设施与公开评论资料。其余酒店可联网获取并保存在本机；没有取得公开报价的酒店显示“查价”，不会伪造价格。</p></div>" +
-        '<div class="about-item"><strong>网络与隐私</strong><p>网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。</p></div>' +
+        '<div class="about-item"><strong>网络与隐私</strong><p>' +
+        (KEYLESS_BUILD
+          ? "当前为无密钥公开构建：联网查价、地图、美团、飞猪和 DeepSeek 功能未配置。酒店目录、收藏、对比、榜单与本地详情仍可使用。"
+          : "网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。") +
+        "</p></div>" +
         '<div class="about-item"><strong>版本</strong><p>旅伴 0.12.1 · 非万豪官方产品 · 目录时间 ' +
         esc(formatDate(DATA.updatedAt)) +
         "</p></div></div>"
