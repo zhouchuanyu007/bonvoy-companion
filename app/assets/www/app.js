@@ -1827,7 +1827,7 @@
       "</button>" +
       '<div class="header-actions">' +
       '<span class="data-mode-pill">全国酒店目录</span>' +
-      '<button class="icon-button" data-action="open-settings" aria-label="打开设置">' +
+      '<button class="icon-button" data-action="open-settings" aria-label="打开设置" title="出行偏好">' +
       icon("settings") +
       "</button>" +
       "</div>";
@@ -1835,7 +1835,7 @@
 
   function renderBottomNav() {
     const items = [
-      { nav: "home", label: "规划", icon: "compass" },
+      { nav: "home", label: "探索", icon: "compass" },
       { nav: "map", label: "地图", icon: "map" },
       { nav: "directory", label: "酒店", icon: "building" },
       { nav: "rankings", label: "榜单", icon: "chart" },
@@ -1849,6 +1849,8 @@
           (active === item.nav ? "is-active" : "") +
           '" data-nav="' +
           item.nav +
+          '" aria-current="' +
+          (active === item.nav ? "page" : "false") +
           '" aria-label="' +
           item.label +
           '">' +
@@ -1868,6 +1870,10 @@
       navContext: state.navContext,
       selectedDestinationId: state.selectedDestinationId,
       selectedHotelId: state.selectedHotelId,
+      directoryQuery: state.directoryQuery,
+      directoryRegion: state.directoryRegion,
+      directoryBrand: state.directoryBrand,
+      directoryLimit: state.directoryLimit,
       mapCity: state.mapCity,
       mapBand: state.mapBand,
       mapManagement: state.mapManagement,
@@ -1922,6 +1928,10 @@
       state.navContext = payload.navContext || navKey(state.route);
       state.selectedDestinationId = payload.selectedDestinationId || null;
       state.selectedHotelId = payload.selectedHotelId || null;
+      state.directoryQuery = payload.directoryQuery || "";
+      state.directoryRegion = payload.directoryRegion || "全国";
+      state.directoryBrand = payload.directoryBrand || "all";
+      state.directoryLimit = Number(payload.directoryLimit) || 24;
       state.mapCity = payload.mapCity || state.mapCity;
       state.mapBand = payload.mapBand || "all";
       state.mapManagement = payload.mapManagement || "all";
@@ -1994,58 +2004,128 @@
     return options.join("");
   }
 
+  function hasPropertyPhoto(hotel) {
+    // Marriott also returns shared brand artwork for properties without photos.
+    return Boolean(hotel && hotel.imageUrl &&
+      !/\/(?:regional-brand-exclusive|global-brand-exclusive|global-property-shared)\//i.test(hotel.imageUrl));
+  }
+
+  function hotelImageMarkup(hotel, className, loading) {
+    if (!hasPropertyPhoto(hotel)) {
+      return (
+        '<div class="' +
+        className +
+        ' image-fallback image-unavailable" role="img" aria-label="暂无酒店照片">' +
+        icon("building") +
+        "</div>"
+      );
+    }
+    return (
+      '<div class="' +
+      className +
+      '"><span class="photo-fallback" aria-hidden="true">' +
+      icon("building") +
+      '</span><img data-hotel-photo src="' +
+      esc(hotel.imageUrl) +
+      '" alt="' +
+      esc(hotel.name || "酒店照片") +
+      '"' +
+      (loading ? ' loading="' + loading + '"' : "") +
+      " /></div>"
+    );
+  }
+
   function renderHome() {
     const pricedCount = DATA.hotels.filter(hasPrice).length;
+    const featuredHotel =
+      DATA.hotels.find(
+        (hotel) => hasPropertyPhoto(hotel) && hotel.brandTier === "奢华"
+      ) || DATA.hotels.find(hasPropertyPhoto) || DATA.hotels[0];
+    const featuredHotels = DATA.hotels
+      .filter(
+        (hotel) =>
+          hasPropertyPhoto(hotel) &&
+          hotel.brandTier === "奢华" &&
+          (!featuredHotel || hotel.id !== featuredHotel.id)
+      )
+      .slice()
+      .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0))
+      .slice(0, 3);
     return (
-      '<div class="screen">' +
-      '<section class="hero-card home-dashboard-hero">' +
-      '<div class="hero-topline">' +
-      '<span class="eyebrow">Bonvoy companion</span>' +
-      '<span class="hero-mvp">DIRECT ACCESS</span>' +
-      "</div>" +
-      '<h1 class="display-title">旅伴</h1>' +
-      '<p class="hero-lede">万豪会员的酒店地图、全国目录、地区榜单和旅行工具。</p>' +
-      '<div class="home-stat-row"><div><strong>' +
-      DATA.hotels.length +
-      "</strong><span>万豪系酒店</span></div><div><strong>" +
-      DATA.destinations.length +
-      "</strong><span>城市</span></div><div><strong>" +
-      pricedCount +
-      "</strong><span>已有报价</span></div></div>" +
-      "</section>" +
-      '<section class="home-action-grid">' +
-      '<button class="home-action-card featured" data-action="go-map">' +
-      '<span class="home-action-icon">' +
+      '<div class="screen home-screen">' +
+      '<section class="home-search-panel"><div class="section-head home-search-head"><div><span class="eyebrow eyebrow-dark">BONVOY COLLECTION</span><h2>酒店探索</h2></div><span class="home-catalog-count">' +
+      DATA.hotels.length + ' 家酒店 · ' + DATA.destinations.length + ' 个城市</span></div>' +
+      '<form id="home-directory-search" class="home-search-form"><label class="home-query-field">' +
+      icon("search") + '<input id="home-directory-query" type="search" aria-label="搜索城市、酒店或品牌" placeholder="城市、酒店或品牌" /></label>' +
+      '<button class="btn btn-primary search-submit" type="submit">搜索酒店 ' + icon("arrowRight") + '</button></form>' +
+      '<div class="home-city-links"><span>目的地</span>' +
+      ["上海", "杭州", "三亚", "成都", "香港"].map((city) =>
+        '<button data-action="browse-city" data-query="' + city + '">' + city + '</button>'
+      ).join("") + '</div></section>' +
+      '<section class="home-hero">' +
+      (hasPropertyPhoto(featuredHotel)
+        ? '<img class="home-hero-image" data-hotel-photo fetchpriority="high" src="' +
+          esc(featuredHotel.imageUrl) +
+          '" alt="' +
+          esc(featuredHotel.name || "酒店照片") +
+          '" />'
+        : "") +
+      '<div class="home-hero-content"><span class="eyebrow">' +
+      esc(featuredHotel ? featuredHotel.brand : "万豪旅享家") +
+      ' · ' +
+      esc(featuredHotel ? featuredHotel.city || featuredHotel.area : "全国") +
+      '</span><h1>' +
+      esc(featuredHotel ? featuredHotel.name : "全国酒店目录") +
+      '</h1>' +
+      (featuredHotel
+        ? '<button class="home-hero-link" data-action="view-hotel" data-id="' +
+          esc(featuredHotel.id) + '">探索酒店 ' + icon("arrowRight") + '</button>'
+        : '<p>酒店目录暂不可用，请稍后重新加载。</p>') +
+      '</div>' +
+      (hasPropertyPhoto(featuredHotel)
+        ? '<span class="home-photo-credit">万豪公开目录图片</span>' : '') +
+      '</section>' +
+      '<div class="home-discovery-grid"><button class="home-route-link" data-action="go-map"><span>' +
       icon("map") +
-      "</span><strong>地图找酒店</strong><p>按城市、日期、价位和品牌查看万豪系酒店与实时起价。</p><em>进入地图 →</em></button>" +
-      '<button class="home-action-card" data-action="go-directory">' +
-      '<span class="home-action-icon">' +
-      icon("building") +
-      "</span><strong>全国酒店目录</strong><p>搜索全部酒店，查看品牌、地区、价格、设施与口碑。</p><em>浏览目录 →</em></button>" +
-      '<button class="home-action-card" data-action="go-rankings">' +
-      '<span class="home-action-icon">' +
+      '</span><strong>地图选酒店</strong>' +
+      icon("arrowRight") +
+      '</button><button class="home-route-link" data-action="go-rankings"><span>' +
       icon("chart") +
-      "</span><strong>分地区榜单</strong><p>按区域、子品牌和价位查看质量与性价比 Top 10。</p><em>查看榜单 →</em></button>" +
-      '<button class="home-action-card" data-action="go-trip">' +
-      '<span class="home-action-icon">' +
+      '</span><strong>地区榜单</strong>' +
+      icon("arrowRight") +
+      '</button><button class="home-route-link" data-action="go-trip"><span>' +
       icon("compass") +
-      "</span><strong>行程规划</strong><p>输入出发地、目的地和日期，联网生成旅行计划。</p><em>开始规划 →</em></button>" +
-      "</section>" +
-      '<section class="section">' +
-      '<div class="content-card card directory-card">' +
-      '<div><span class="eyebrow" style="color:#856634">National directory</span><h2>全国酒店目录</h2>' +
-      "<p>已收录 " +
-      DATA.hotels.length +
-      " 家官方酒店，覆盖 " +
-      DATA.destinations.length +
-      " 个城市，包括三四线及以下城市中的万豪系物业。</p></div>" +
-      '<div class="directory-card-actions"><button class="btn btn-primary" data-action="go-directory">打开酒店目录</button><button class="btn btn-secondary" data-action="go-map">地图查看</button></div>' +
+      '</span><strong>规划行程</strong>' +
+      icon("arrowRight") +
+      "</button></div>" +
+      '<section class="section home-featured-section"><div class="section-head"><div><span class="eyebrow eyebrow-dark">THE LUXURY EDIT</span><h2>奢华品牌精选</h2></div><button class="section-link" data-action="go-directory">全部酒店 ' +
+      icon("arrowRight") + '</button></div><div class="home-featured-list">' +
+      featuredHotels
+        .map(
+          (hotel) =>
+            '<button class="home-featured-hotel" data-action="view-hotel" data-id="' +
+            esc(hotel.id) +
+            '">' +
+            hotelImageMarkup(hotel, "home-featured-image", "lazy") +
+            '<span class="home-featured-copy"><small>' +
+            esc(hotel.brand) +
+            " · " +
+            esc(hotel.city || hotel.area) +
+            '</small><strong>' +
+            esc(hotel.name) +
+            '</strong><span>' +
+            (hasPrice(hotel) ? esc(priceLabel(hotel)) + " / 晚 · 参考价" : "公开价格待核验") +
+            '</span></span><span class="home-featured-arrow">' +
+            icon("arrowRight") +
+            "</span></button>"
+        )
+        .join("") +
       "</div></section>" +
       '<div class="method-note">' +
       icon("info") +
-      "<span>酒店名称、品牌、坐标与基础信息来自万豪公开目录快照（" +
+      "<span>万豪公开目录 · " +
       esc(formatDate(DATA.updatedAt)) +
-      "）。实时价格、设施和公开评价会在联网后补充；没有报价的酒店显示“查价”。</span>" +
+      " 更新 · " + pricedCount + " 家有报价快照。参考价非实时库存，实际价格与会员权益以预订渠道为准。</span>" +
       "</div>" +
       "</div>"
     );
@@ -2181,7 +2261,9 @@
           visible
             .map((hotel) => {
               return (
-                '<article class="directory-entry card"><div class="directory-entry-head"><div><span class="eyebrow" style="color:#856634">' +
+                '<article class="directory-entry card">' +
+                hotelImageMarkup(hotel, "directory-entry-image", "lazy") +
+                '<div class="directory-entry-body"><div class="directory-entry-head"><div><span class="eyebrow eyebrow-dark">' +
                 esc(hotel.province) +
                 " · " +
                 esc(hotel.city || hotel.area) +
@@ -2192,7 +2274,7 @@
                 "</p></div><div class=\"directory-price\"><strong>" +
                 esc(priceLabel(hotel)) +
                 "</strong><span>" +
-                (hasPrice(hotel) ? "含税/晚" : "官方查价") +
+                (hasPrice(hotel) ? "含税参考/晚" : "官方查价") +
                 (Number(hotel.pointsPrice) > 0
                   ? '<br /><span class="directory-points-price">' +
                     esc(pointsLabel(hotel)) +
@@ -2206,6 +2288,10 @@
                 '</span><span class="inline-chip">评分 ' +
                 (hotel.rating ? hotel.rating.toFixed(1) : "待补") +
                 "</span></div>" +
+                (hasPrice(hotel) && hotel.priceMeta && hotel.priceMeta.checkIn
+                  ? '<p class="directory-price-date">参考入住日 ' +
+                    esc(formatDate(hotel.priceMeta.checkIn)) + '</p>'
+                  : '') +
                 '<p class="directory-summary">' +
                 esc(directoryHotelSummary(hotel)) +
                 "</p>" +
@@ -2215,7 +2301,7 @@
                 esc(hotel.id) +
                 '">' +
                 (favorites.has(hotel.id) ? "已收藏" : "收藏") +
-                "</button></div></article>"
+                "</button></div></div></article>"
               );
             })
             .join("") +
@@ -2243,7 +2329,12 @@
       departure: document.getElementById("departure-input").value.trim() || "上海",
       destinationName: document.getElementById("destination-input").value.trim(),
       date: document.getElementById("date-input").value || defaultTravelDate(1),
-      month: Number(document.getElementById("month-input").value) || 11,
+      month:
+        Number(
+          (document.getElementById("month-input") || {}).value ||
+            (document.getElementById("date-input") || {}).value?.slice(5, 7)
+        ) ||
+        11,
       days: Number(document.getElementById("days-input").value) || 3,
       people: Number(document.getElementById("people-input").value) || 2,
       rooms: 1,
@@ -2723,7 +2814,7 @@
   }
 
   function hotelCard(hotel, compact) {
-    const visualStyle = hotel.imageUrl
+    const visualStyle = hasPropertyPhoto(hotel)
       ? ' style="background-image:linear-gradient(180deg,rgba(9,23,37,.05),rgba(9,23,37,.55)),url(&quot;' +
         esc(hotel.imageUrl) +
         '&quot;);background-size:cover;background-position:center"'
@@ -4620,7 +4711,7 @@
       esc(hotel.brandTier) +
       "</span></div>" +
       '<section class="hotel-detail-hero"' +
-      (hotel.imageUrl
+      (hasPropertyPhoto(hotel)
         ? ' style="background-image:linear-gradient(180deg,rgba(9,23,37,.12),rgba(9,23,37,.86)),url(&quot;' +
           esc(hotel.imageUrl) +
           '&quot;);background-size:cover;background-position:center"'
@@ -6701,6 +6792,7 @@
     }
     renderHeader();
     renderBottomNav();
+    appMain.dataset.route = state.route;
     appMain.innerHTML = screenForRoute();
     updatePointsResult();
     if (state.route === "map") {
@@ -6838,6 +6930,15 @@
     const action = target.dataset.action;
     const id = target.dataset.id;
 
+    if (action === "browse-city") {
+      navigate("directory", {
+        directoryQuery: target.dataset.query || "",
+        directoryRegion: "全国",
+        directoryBrand: "all",
+        directoryLimit: 24
+      });
+      return;
+    }
     if (action === "quick-search") {
       const input = document.getElementById("query-input");
       if (!input) {
@@ -7017,6 +7118,7 @@
     }
     if (action === "load-more-directory") {
       state.directoryLimit += 30;
+      replaceHistorySnapshot();
       render();
       return;
     }
@@ -7025,6 +7127,7 @@
       state.directoryRegion = "全国";
       state.directoryBrand = "all";
       state.directoryLimit = 24;
+      replaceHistorySnapshot();
       render();
       return;
     }
@@ -7160,6 +7263,16 @@
   }
 
   function handleSubmit(event) {
+    if (event.target.id === "home-directory-search") {
+      event.preventDefault();
+      navigate("directory", {
+        directoryQuery: document.getElementById("home-directory-query").value.trim(),
+        directoryRegion: "全国",
+        directoryBrand: "all",
+        directoryLimit: 24
+      });
+      return;
+    }
     if (event.target.id === "search-form") {
       event.preventDefault();
       if (document.getElementById("destination-input").value.trim()) {
@@ -7208,6 +7321,7 @@
         .getElementById("directory-query-input")
         .value.trim();
       state.directoryLimit = 24;
+      replaceHistorySnapshot();
       render();
       return;
     }
@@ -7225,12 +7339,14 @@
     if (event.target.id === "directory-region") {
       state.directoryRegion = event.target.value;
       state.directoryLimit = 24;
+      replaceHistorySnapshot();
       render();
       return;
     }
     if (event.target.id === "directory-brand") {
       state.directoryBrand = event.target.value;
       state.directoryLimit = 24;
+      replaceHistorySnapshot();
       render();
       return;
     }
@@ -7305,6 +7421,12 @@
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("change", handleChange);
   document.addEventListener("input", handleInput);
+  document.addEventListener("error", (event) => {
+    if (event.target.matches && event.target.matches("img[data-hotel-photo]")) {
+      event.target.hidden = true;
+      event.target.parentElement.classList.add("image-unavailable");
+    }
+  }, true);
   backdrop.addEventListener("click", closeSheet);
   window.addEventListener("popstate", (event) => {
     closeSheet();
