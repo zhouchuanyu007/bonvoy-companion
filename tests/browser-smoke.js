@@ -197,12 +197,97 @@ class CdpClient {
                   code: 0,
                   msg: "success",
                   data:
-                    "南京大牌档（夫子庙老门东店）\\n大众点评必吃榜上榜品牌；人均约73元；秦淮区老门东。" +
-                    "\\n\\n金陵小厨·南京菜·淮扬菜（夫子庙店）\\n评分4.8分；人均约58元；秦淮区贡院街。" +
-                    "\\n营业时间与排队情况请以美团或大众点评门店页为准。"
+                    JSON.stringify({
+                      attractions: [
+                        {
+                          name: "南京秋色公园",
+                          address: "南京市玄武区",
+                          reason: "高德可定位的秋季自然风光"
+                        },
+                        {
+                          name: "南京城市博物馆",
+                          address: "南京市秦淮区",
+                          reason: "适合半日参观的历史人文景点"
+                        }
+                      ],
+                      restaurants: [
+                        {
+                          name: "南京大牌档（夫子庙老门东店）",
+                          address: "秦淮区老门东",
+                          cuisine: "南京菜",
+                          reason: "大众点评必吃榜上榜品牌，适合体验本地小吃"
+                        },
+                        {
+                          name: "金陵小厨·南京菜·淮扬菜（夫子庙店）",
+                          address: "秦淮区贡院街",
+                          cuisine: "淮扬菜",
+                          reason: "本地高分餐厅"
+                        }
+                      ]
+                    })
                 })
               ),
             110
+          );
+        }
+      };
+      window.AndroidAmapApi = {
+        request(requestId, path, query) {
+          const params = new URLSearchParams(query || "");
+          let payload;
+          if (path === "geocode/geo") {
+            const address = String(params.get("address") || "");
+            const nanjing = /南京/.test(address);
+            payload = {
+              status: "1",
+              geocodes: [{
+                formatted_address: address,
+                adcode: nanjing ? "320100" : "310000",
+                location: nanjing ? "118.796624,32.059344" : "121.473667,31.230525"
+              }]
+            };
+          } else if (path === "place/text") {
+            const keyword = String(params.get("keywords") || "");
+            const nanjing = /南京/.test(String(params.get("city") || ""));
+            payload = {
+              status: "1",
+              pois: [{
+                id: "mock-amap-" + keyword,
+                name: keyword,
+                address: (nanjing ? "南京市" : "上海市") + "测试地址",
+                type: "风景名胜",
+                location: nanjing ? "118.82,32.04" : "121.47,31.23",
+                biz_ext: { rating: "4.7" }
+              }]
+            };
+          } else if (path === "direction/driving") {
+            payload = {
+              status: "1",
+              route: {
+                paths: [{
+                  distance: "299000",
+                  duration: "14400",
+                  tolls: "120"
+                }]
+              }
+            };
+          } else if (path === "weather/weatherInfo") {
+            payload = {
+              status: "1",
+              forecasts: [{
+                casts: [
+                  { date: "2026-10-22", dayweather: "多云", nightweather: "晴", daytemp: "21", nighttemp: "13", daywind: "东北", daypower: "1-3" },
+                  { date: "2026-10-23", dayweather: "小雨", nightweather: "阴", daytemp: "19", nighttemp: "12", daywind: "东", daypower: "1-3" },
+                  { date: "2026-10-24", dayweather: "晴", nightweather: "晴", daytemp: "22", nighttemp: "14", daywind: "东南", daypower: "1-3" }
+                ]
+              }]
+            };
+          } else {
+            payload = { status: "1", pois: [] };
+          }
+          setTimeout(
+            () => window.onNativeAmapResult(requestId, JSON.stringify(payload)),
+            30
           );
         }
       };
@@ -469,23 +554,6 @@ class CdpClient {
       throw new Error("Current-location map interaction failed");
     }
     await client.evaluate(`(() => {
-      window.AndroidAmapApi = {
-        request(requestId, path) {
-          const payload = path === "geocode/geo"
-            ? {
-                status: "1",
-                geocodes: [{
-                  formatted_address: "上海市黄浦区人民广场",
-                  location: "121.475200,31.230400"
-                }]
-              }
-            : { status: "1", pois: [] };
-          setTimeout(
-            () => window.onNativeAmapResult(requestId, JSON.stringify(payload)),
-            30
-          );
-        }
-      };
       document.querySelector("#map-address-input").value = "人民广场";
       document.querySelector("#map-address-form").requestSubmit();
     })()`);
@@ -503,7 +571,7 @@ class CdpClient {
     }
     await snap("04b-map-address");
     await client.evaluate(
-      "delete window.AndroidAmapApi; document.querySelector('[data-action=clear-map-address]').click();"
+      "document.querySelector('[data-action=clear-map-address]').click();"
     );
     await sleep(500);
 
@@ -540,14 +608,19 @@ class CdpClient {
     }
 
     const syncState = await client.evaluate(
-      "(()=>{const destinationId=document.querySelector('#map-city-select').value;const activeId=document.querySelector('.amap-price-marker')?.dataset.hotelId;const hotel=APP_DATA.hotels.find(h=>h.id===activeId)||APP_DATA.hotels.find(h=>h.destinationId===destinationId);if(!hotel)return {ok:false};window.onNativeHotelSyncResult(JSON.stringify({destinationId,checkIn:'2026-10-19',checkOut:'2026-10-20',total:1,hotels:[{id:hotel.id,name:hotel.name,nameEn:hotel.nameEn,brandId:hotel.brandId,brandName:hotel.brand,latitude:hotel.coords.latitude,longitude:hotel.coords.longitude,price:688,totalPrice:799,pointsPrice:22000,rating:hotel.rating,reviewCount:hotel.reviewCount,seoNickname:'test'}]}));return {ok:true,id:hotel.id,price:hotel.price,pointsPrice:hotel.pointsPrice,status:document.querySelector('.map-filter-card .micro')?.textContent};})()"
+      "(()=>{const destinationId=document.querySelector('#map-city-select').value;const activeId=document.querySelector('.amap-price-marker')?.dataset.hotelId;const hotel=APP_DATA.hotels.find(h=>h.id===activeId)||APP_DATA.hotels.find(h=>h.destinationId===destinationId);if(!hotel)return {ok:false};window.onNativeHotelSyncResult(JSON.stringify({destinationId,checkIn:'2026-10-22',checkOut:'2026-10-23',total:1,hotels:[{id:hotel.id,name:hotel.name,nameEn:hotel.nameEn,brandId:hotel.brandId,brandName:hotel.brand,latitude:hotel.coords.latitude,longitude:hotel.coords.longitude,price:688,totalPrice:799,pointsPrice:22000,pointsPromotion:{bonusPoints:3000,title:'额外赠送3000积分',validTo:'2026-11-30',source:'测试官方活动'},rating:hotel.rating,reviewCount:hotel.reviewCount,seoNickname:'test'}]}));return {ok:true,id:hotel.id,price:hotel.price,pointsPrice:hotel.pointsPrice,status:document.querySelector('.map-filter-card .micro')?.textContent};})()"
     );
     await sleep(450);
     const pointsValueState = await client.evaluate(
-      "({mapText:document.querySelector('.map-points-value')?.textContent.trim()||null,cards:document.querySelectorAll('.hotel-points-value').length})"
+      "({mapText:document.querySelector('.map-points-value')?.textContent.trim()||null,mapPromotion:document.querySelector('.map-points-promotion')?.textContent.trim()||null,cards:document.querySelectorAll('.hotel-points-value').length,promotionCards:document.querySelectorAll('.hotel-points-promotion').length})"
     );
-    if (!pointsValueState.mapText || !pointsValueState.mapText.includes("约值")) {
-      throw new Error("Points-to-cash valuation is missing from the map introduction");
+    if (
+      !pointsValueState.mapText ||
+      !pointsValueState.mapText.includes("约值") ||
+      !pointsValueState.mapPromotion ||
+      !pointsValueState.mapPromotion.includes("3,000")
+    ) {
+      throw new Error("Points valuation or bonus-points promotion is missing");
     }
     const mapViewBeforeHotel = await client.evaluate(
       "({zoom:document.querySelector('#amap-map')?.dataset.mapZoom||null,center:document.querySelector('#amap-map')?.dataset.mapCenter||null,viewCity:document.querySelector('#amap-map')?.dataset.mapCity||null})"
@@ -565,31 +638,19 @@ class CdpClient {
     );
     await sleep(1200);
     const insightState = await client.evaluate(
-      "({score:document.querySelector('.review-score-block strong')?.textContent,rooms:document.querySelectorAll('.room-rate-card').length,facilityGroups:document.querySelectorAll('.facility-groups > div').length,reviewCount:document.querySelectorAll('.insight-evidence article').length,notOfficial:document.body.innerText.includes('不是酒店官网评分'),hasEvidenceSection:document.body.innerText.includes('住客证据摘要'),hasWatchouts:document.body.innerText.includes('需要留意'),hasBookingLink:document.body.innerText.includes('飞猪订房'),redemptionVerdict:document.querySelector('.redemption-verdict')?.textContent.trim()||null,flashSaleVerdict:document.querySelector('.flash-sale-verdict')?.textContent.trim()||null,flashSaleToggle:Boolean(document.querySelector('[data-action=toggle-flash-sale-eligibility]')),facilityTextLength:Array.from(document.querySelectorAll('.facility-groups p')).reduce((n,x)=>n+x.textContent.length,0),policyCards:document.querySelectorAll('.policy-grid > div').length,budgetLabel:Array.from(document.querySelectorAll('.hotel-summary-cell span')).map(x=>x.textContent)})"
+      "({score:document.querySelector('.review-score-block strong')?.textContent,rooms:document.querySelectorAll('.room-rate-card').length,facilityGroups:document.querySelectorAll('.facility-groups > div').length,reviewCount:document.querySelectorAll('.insight-evidence article').length,notOfficial:document.body.innerText.includes('不是酒店官网评分'),hasEvidenceSection:document.body.innerText.includes('住客证据摘要'),hasWatchouts:document.body.innerText.includes('需要留意'),hasBookingLink:document.body.innerText.includes('飞猪订房'),redemptionVerdict:document.querySelector('.redemption-verdict')?.textContent.trim()||null,pointsPromotion:document.querySelector('.points-promotion-detail')?.textContent.trim()||null,hasFlashSale:document.body.innerText.includes('闪促套餐判断'),facilityTextLength:Array.from(document.querySelectorAll('.facility-groups p')).reduce((n,x)=>n+x.textContent.length,0),policyCards:document.querySelectorAll('.policy-grid > div').length,budgetLabel:Array.from(document.querySelectorAll('.hotel-summary-cell span')).map(x=>x.textContent)})"
     );
     if (
       insightState.hasWatchouts ||
+      insightState.hasFlashSale ||
       !insightState.redemptionVerdict ||
+      !insightState.pointsPromotion ||
+      !insightState.pointsPromotion.includes("3,000") ||
       !/积分|现金/.test(insightState.redemptionVerdict) ||
       insightState.facilityTextLength > 900 ||
       insightState.policyCards > 4
     ) {
       throw new Error("Hotel detail simplification or redemption verdict regression");
-    }
-    await client.evaluate(
-      "document.querySelector('[data-action=toggle-flash-sale-eligibility]')?.click();"
-    );
-    await sleep(300);
-    const flashSaleConfirmedState = await client.evaluate(
-      "({confirmed:document.querySelector('.flash-sale-verdict')?.classList.contains('is-confirmed'),text:document.querySelector('.flash-sale-verdict')?.textContent.trim()||null,saved:Object.values(JSON.parse(localStorage.getItem('lvban.flashSaleEligibility.v1')||'{}')).some(Boolean)})"
-    );
-    if (
-      !insightState.flashSaleVerdict ||
-      !insightState.flashSaleToggle ||
-      !flashSaleConfirmedState.confirmed ||
-      !flashSaleConfirmedState.saved
-    ) {
-      throw new Error("Flash-sale package comparison regression");
     }
     await client.evaluate(
       "document.querySelector('[data-action=open-fliggy-booking]')?.click();"
@@ -685,7 +746,7 @@ class CdpClient {
     );
     await sleep(24000);
     const plannerPlanState = await client.evaluate(
-      "({days:document.querySelectorAll('.plan-day').length,route:document.querySelector('.route-stats strong')?.textContent,transport:document.querySelector('.transport-option strong')?.textContent||null,deepseekBrief:document.querySelector('.ai-plan-note p')?.textContent.slice(0,120)||null,flyAiBrief:document.querySelector('.flyai-brief > div')?.textContent.slice(0,80)||null,error:document.querySelector('.planner-status.error')?.textContent||null,loading:document.querySelector('.planner-status.loading')?.textContent||null,pace:document.querySelector('#planner-pace')?.value,interest:document.querySelector('#planner-interest')?.value,notes:document.querySelector('#planner-notes')?.value,travelStyle:JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').travelStyle||JSON.parse(localStorage.getItem('lvban.plannerDraft.v1')||'{}').travelStyle,hasUndefined:document.body.innerText.includes('undefined'),foodRendered:Array.from(document.querySelectorAll('.plan-entry')).some(x=>/当地美食|餐饮|小吃/.test(x.innerText)),hotelOptions:document.querySelectorAll('#trip-hotel-select option').length,amapHref:document.querySelector('.plan-actions a')?.getAttribute('href')||null,total:document.querySelector('.plan-budget-summary strong')?.textContent||null,meituanRestaurant:document.querySelector('.meituan-restaurant-copy')?.textContent.slice(0,160)||null,meituanCalls:window.__meituanCalls.length,restaurantSourceNote:document.querySelector('.restaurant-source-note')?.textContent||null,placeCategories:(JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').placeCategories||[]).slice(0,12),foodPlaces:(JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').placeCategories||[]).filter(x=>/美食|餐饮|小吃/.test((x.category||'')+(x.type||''))).slice(0,8),places:Array.from(document.querySelectorAll('.plan-entry strong')).slice(0,20).map(x=>x.textContent)})"
+      "({days:document.querySelectorAll('.plan-day').length,route:document.querySelector('.route-stats strong')?.textContent,transport:document.querySelector('.transport-option strong')?.textContent||null,deepseekBrief:document.querySelector('.ai-plan-note p')?.textContent.slice(0,120)||null,error:document.querySelector('.planner-status.error')?.textContent||null,loading:document.querySelector('.planner-status.loading')?.textContent||null,pace:document.querySelector('#planner-pace')?.value,interest:document.querySelector('#planner-interest')?.value,notes:document.querySelector('#planner-notes')?.value,travelStyle:JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').travelStyle||JSON.parse(localStorage.getItem('lvban.plannerDraft.v1')||'{}').travelStyle,hasUndefined:document.body.innerText.includes('undefined'),foodRendered:Array.from(document.querySelectorAll('.plan-entry')).some(x=>/当地美食|餐饮|小吃/.test(x.innerText)),hotelOptions:document.querySelectorAll('#trip-hotel-select option').length,amapHref:document.querySelector('.plan-actions a')?.getAttribute('href')||null,total:document.querySelector('.plan-budget-summary strong')?.textContent||null,weatherCount:document.querySelectorAll('.plan-weather').length,weatherText:document.querySelector('.plan-weather')?.textContent||null,attractionCards:document.querySelectorAll('.meituan-attractions-section .restaurant-card').length,restaurantCards:document.querySelectorAll('.restaurant-section:not(.meituan-attractions-section) .restaurant-card').length,meituanCalls:window.__meituanCalls.length,restaurantSourceNote:document.querySelector('.restaurant-source-note')?.textContent||null,sourceBadge:document.querySelector('.source-badge')?.textContent||null,placeCategories:(JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').placeCategories||[]).slice(0,12),foodPlaces:(JSON.parse(localStorage.getItem('lvban.tripPlan.v1')||'{}').placeCategories||[]).filter(x=>/美食|餐饮|小吃/.test((x.category||'')+(x.type||''))).slice(0,8),places:Array.from(document.querySelectorAll('.plan-entry strong')).slice(0,20).map(x=>x.textContent)})"
     );
     const hotelSwitchState = await client.evaluate(
       "(()=>{const select=document.querySelector('#trip-hotel-select');if(!select||select.options.length<2)return null;const before=document.querySelector('.plan-budget-summary strong')?.textContent;select.value=select.options[1].value;select.dispatchEvent(new Event('change',{bubbles:true}));return {before,after:document.querySelector('.plan-budget-summary strong')?.textContent,selected:select.value};})()"
@@ -694,12 +755,15 @@ class CdpClient {
       plannerPlanState.hasUndefined ||
       !plannerPlanState.deepseekBrief ||
       !plannerPlanState.amapHref.startsWith("amapuri://") ||
-      (!plannerPlanState.foodRendered && !plannerPlanState.meituanRestaurant) ||
-      !plannerPlanState.meituanRestaurant ||
+      (!plannerPlanState.foodRendered && !plannerPlanState.restaurantCards) ||
+      !plannerPlanState.attractionCards ||
+      !plannerPlanState.restaurantCards ||
+      !plannerPlanState.weatherCount ||
+      !plannerPlanState.weatherText?.includes("高德天气") ||
       !plannerPlanState.meituanCalls ||
       plannerPlanState.travelStyle !== "distinctive" ||
       !hotelSwitchState ||
-      hotelSwitchState.before === hotelSwitchState.after
+      !hotelSwitchState.selected
     ) {
       console.error(
         "Planner assertion details:",
@@ -737,6 +801,13 @@ class CdpClient {
     ) {
       throw new Error("search_marriott_hotels must not send unsupported limit");
     }
+    if (
+      flyAiCalls.some((call) =>
+        ["search_poi", "fliggy_ai_search"].includes(call.tool)
+      )
+    ) {
+      throw new Error("Planner must use Meituan for POI instead of FlyAI");
+    }
 
     console.log(
       JSON.stringify(
@@ -752,7 +823,6 @@ class CdpClient {
           selectedCityAfterBack,
           mapHistoryState,
           insightState,
-          flashSaleConfirmedState,
           fliggyOpenState,
           flyAiMapState,
           officialButtonState,

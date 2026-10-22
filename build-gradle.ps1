@@ -43,7 +43,7 @@ $releaseDir = Join-Path $root "app\build\outputs\apk\release"
 $signedSource = Join-Path $releaseDir "app-release.apk"
 $unsignedSource = Join-Path $releaseDir "app-release-unsigned.apk"
 $distDir = Join-Path $root "dist"
-$versionName = "0.11.0"
+$versionName = "0.12.0"
 
 $javaExecutable = if ($javaHome) {
     Join-Path $javaHome "bin\java.exe"

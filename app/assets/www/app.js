@@ -6,6 +6,9 @@
   const BUNDLED_HOTEL_INSIGHTS = window.APP_HOTEL_INSIGHTS || {
     hotels: {}
   };
+  const BUNDLED_POINTS_PROMOTIONS = window.APP_POINTS_PROMOTIONS || {
+    hotels: {}
+  };
 
   const MONTHS = Array.from({ length: 12 }, (_, index) => index + 1);
   const DEFAULT_QUERY = "十一月想去看秋色，有万豪酒店，预算 5000，少走路";
@@ -17,12 +20,6 @@
     window.BONVOY_AMAP_KEY ||
     "";
   const MAP_ADDRESS_RADIUS_KM = 12;
-  const FLASH_SALE_OFFER = {
-    id: "double11-marriott-room-voucher-2026",
-    title: "飞猪双十一万豪房晚兑换券",
-    price: 1088,
-    nights: 2
-  };
   const DEFAULT_PREFS = {
     departure: "上海",
     month: 11,
@@ -321,6 +318,15 @@
             checkOut: payload.checkOut,
             source: "Marriott official points rate"
           };
+        }
+        const officialPromotion = normalizePointsPromotion(
+          item.pointsPromotion ||
+            item.bonusPointsPromotion ||
+            item.promotion,
+          "万豪官方实时返回"
+        );
+        if (officialPromotion) {
+          existing.pointsPromotion = officialPromotion;
         }
         existing.priceMeta = hasLivePrice
           ? {
@@ -641,6 +647,10 @@
       hotel.nearbyPoi = item.nearbyPoi || hotel.nearbyPoi || "";
       hotel.starLabel = item.star || hotel.starLabel || "";
       hotel.lastRenovation = item.decorationTime || hotel.lastRenovation || "";
+      const pointsPromotion = pointsPromotionFromFlyAiItem(item);
+      if (pointsPromotion) {
+        hotel.pointsPromotion = pointsPromotion;
+      }
       hotel.flyAiScore = Number(item.score || item.rate) || hotel.flyAiScore || null;
       hotel.lastLiveSyncAt = fetchedAt;
       hotel.priceUpdatedAt = fetchedAt;
@@ -1298,8 +1308,7 @@
     safeRead("lvban.hotelInsightCache.v1", {})
   );
   let flyAiResponseCache = safeRead("lvban.flyAiResponseCache.v1", {});
-  let meituanRestaurantCache = safeRead("lvban.meituanRestaurantCache.v1", {});
-  let flashSaleEligibility = safeRead("lvban.flashSaleEligibility.v1", {});
+  let meituanGuideCache = safeRead("lvban.meituanGuideCache.v1", {});
   hydrateLiveHotelCache();
   hydrateFlyAiHotelCache();
   let onboardingDismissed = safeRead("lvban.onboarding.v1", false);
@@ -1430,6 +1439,122 @@
       : "积分待查";
   }
 
+  function normalizePointsPromotion(value, fallbackSource) {
+    if (!value) return null;
+    const raw = Array.isArray(value)
+      ? value.find((item) => item && /积分|bonus|points/i.test(JSON.stringify(item)))
+      : value;
+    if (!raw) return null;
+    const object = typeof raw === "object" ? raw : { title: String(raw) };
+    const title = cleanHotelText(
+      object.title ||
+        object.name ||
+        object.label ||
+        object.description ||
+        object.promotionName ||
+        ""
+    );
+    const numericCandidates = [
+      object.bonusPoints,
+      object.extraPoints,
+      object.rewardPoints,
+      object.points,
+      object.bonus
+    ];
+    let bonusPoints = numericCandidates
+      .map((item) => Number(String(item == null ? "" : item).replace(/,/g, "")))
+      .find((item) => Number.isFinite(item) && item > 0);
+    if (!bonusPoints && title) {
+      const match = title.match(
+        /(?:额外|加赠|赠送|送|bonus)[^0-9]{0,8}(\d{1,6})\s*分/i
+      );
+      if (match) bonusPoints = Number(match[1]);
+    }
+    if (!bonusPoints || !Number.isFinite(bonusPoints)) return null;
+    return {
+      bonusPoints: Math.round(bonusPoints),
+      title: title || "额外赠送万豪积分",
+      validFrom: object.validFrom || object.startDate || object.valid_start || null,
+      validTo: object.validTo || object.endDate || object.valid_end || null,
+      source:
+        object.source ||
+        object.sourceLabel ||
+        fallbackSource ||
+        "公开活动数据",
+      fetchedAt: object.fetchedAt || new Date().toISOString()
+    };
+  }
+
+  function bundledPointsPromotion(hotel) {
+    const hotels = BUNDLED_POINTS_PROMOTIONS.hotels || {};
+    const direct = hotels[hotel.id];
+    if (direct) {
+      return normalizePointsPromotion(
+        direct,
+        BUNDLED_POINTS_PROMOTIONS.source || "本地积分闪促快照"
+      );
+    }
+    const target = normalizeHotelKey(hotel.name);
+    const match = Object.values(hotels).find(
+      (item) => item && normalizeHotelKey(item.hotelName || item.name) === target
+    );
+    return match
+      ? normalizePointsPromotion(
+          match,
+          BUNDLED_POINTS_PROMOTIONS.source || "本地积分闪促快照"
+        )
+      : null;
+  }
+
+  function pointsPromotionForHotel(hotel) {
+    return (
+      normalizePointsPromotion(hotel && hotel.pointsPromotion, "实时酒店数据") ||
+      bundledPointsPromotion(hotel)
+    );
+  }
+
+  function pointsPromotionLabel(hotel) {
+    const promotion = pointsPromotionForHotel(hotel);
+    if (!promotion) return "";
+    const validUntil = promotion.validTo
+      ? " · 截至 " + formatDate(promotion.validTo)
+      : "";
+    return (
+      "积分闪促：额外赠 " +
+      Math.round(promotion.bonusPoints).toLocaleString("zh-CN") +
+      " 分" +
+      validUntil
+    );
+  }
+
+  function pointsPromotionFromFlyAiItem(item) {
+    const direct = normalizePointsPromotion(
+      item.pointsPromotion ||
+        item.bonusPointsPromotion ||
+        item.promotionInfo ||
+        item.promotions ||
+        item.promotion,
+      "飞猪酒店实时返回"
+    );
+    if (direct) return direct;
+    const bonus = normalizePointsPromotion(
+      {
+        bonusPoints:
+          item.bonusPoints || item.extraPoints || item.pointsBonus || null,
+        title:
+          item.bonusPointsTitle ||
+          item.promotionTitle ||
+          item.activityName ||
+          "",
+        validFrom: item.promotionStart || item.validFrom,
+        validTo: item.promotionEnd || item.validTo,
+        source: "飞猪酒店实时返回"
+      },
+      "飞猪酒店实时返回"
+    );
+    return bonus;
+  }
+
   function pointsValuation(hotel) {
     const cash = Number(hotel && hotel.price);
     const points = Number(hotel && hotel.pointsPrice);
@@ -1472,58 +1597,6 @@
 
   function travelStyleLabel(value) {
     return value === "distinctive" ? "别具一格" : "性价比和质量平衡";
-  }
-
-  function flashSaleComparison(hotel) {
-    if (!hasPrice(hotel)) return null;
-    const directCost = Number(hotel.price) * FLASH_SALE_OFFER.nights;
-    const savings = directCost - FLASH_SALE_OFFER.price;
-    const eligibility = flashSaleEligibility[hotel.id];
-    return {
-      directCost,
-      savings,
-      eligibility:
-        eligibility === true ? "confirmed" : eligibility === false ? "excluded" : "unknown",
-      packageNightly: FLASH_SALE_OFFER.price / FLASH_SALE_OFFER.nights
-    };
-  }
-
-  function flashSalePotentialLabel(hotel) {
-    const comparison = flashSaleComparison(hotel);
-    if (!comparison || comparison.savings <= 0) return "";
-    if (comparison.eligibility === "confirmed") {
-      return (
-        "闪促券已核验：两晚约省 " + money(comparison.savings)
-      );
-    }
-    if (comparison.eligibility === "excluded") return "";
-    return (
-      "闪促券或省 " +
-      money(comparison.savings) +
-      "（适用及周末规则待核验）"
-    );
-  }
-
-  function applyConfirmedFlashSaleCost(hotel, cost) {
-    if (
-      !cost ||
-      flashSaleEligibility[hotel.id] !== true ||
-      Number(cost.nights) !== FLASH_SALE_OFFER.nights ||
-      Number(cost.rooms) !== 1 ||
-      !Number.isFinite(Number(cost.lodging)) ||
-      Number(cost.lodging) <= FLASH_SALE_OFFER.price
-    ) {
-      return cost;
-    }
-    const savings = Number(cost.lodging) - FLASH_SALE_OFFER.price;
-    return Object.assign({}, cost, {
-      total: Number(cost.total) - savings,
-      difference: Number(cost.difference) + savings,
-      lodging: FLASH_SALE_OFFER.price,
-      flashSaleApplied: true,
-      flashSaleSavings: savings,
-      flashSaleOriginalLodging: Number(cost.lodging)
-    });
   }
 
   function isFliggyUrl(value) {
@@ -2411,8 +2484,7 @@
     };
     return LOGIC.hotelsFor(destination.id)
       .map((hotel) => {
-        const baseCost = LOGIC.calculateTripCost(destination, hotel, params);
-        const cost = applyConfirmedFlashSaleCost(hotel, baseCost);
+        const cost = LOGIC.calculateTripCost(destination, hotel, params);
         const insight = hotelInsightCache[hotel.id] || null;
         const facilities = JSON.stringify(
           (insight && insight.facilities) || {}
@@ -2459,8 +2531,6 @@
         return {
           hotel,
           cost,
-          flashSaleApplied: Boolean(cost.flashSaleApplied),
-          flashSaleSavings: cost.flashSaleSavings || 0,
           withinBudget: !budget || cost.total <= budget,
           noteBoost,
           distinctiveBoost,
@@ -2684,9 +2754,9 @@
           esc(pointsValueLabel(hotel)) +
           "</p>"
         : "") +
-      (flashSalePotentialLabel(hotel)
-        ? '<p class="hotel-flash-value">' +
-          esc(flashSalePotentialLabel(hotel)) +
+      (pointsPromotionLabel(hotel)
+        ? '<p class="hotel-points-promotion">' +
+          esc(pointsPromotionLabel(hotel)) +
           "</p>"
         : "") +
       "</div>" +
@@ -3069,6 +3139,9 @@
       hotels.find((hotel) => hotel.id === state.mapSelectedHotelId) || hotels[0] || null;
     const visibleHotels = hotels.slice(0, state.mapVisible);
     const pricedCount = hotels.filter((hotel) => hasPrice(hotel)).length;
+    const pointsPromotionCount = hotels.filter((hotel) =>
+      Boolean(pointsPromotionForHotel(hotel))
+    ).length;
     const missingPriceCount = cityHotels.filter((hotel) => !hasPrice(hotel)).length;
     const selectedValueLabel = selected ? pointsValueLabel(selected) : "";
     const addressFallback =
@@ -3102,7 +3175,10 @@
       pricedCount +
       " 家已有报价" +
       (missingPriceCount ? " · " + missingPriceCount + " 家待补" : "") +
-      "</span></div>" +
+      (pointsPromotionCount
+        ? "</span><strong>" + pointsPromotionCount + " 家积分闪促</strong>"
+        : "</span>") +
+      "</div>" +
       "</section>" +
       '<section class="card map-address-card">' +
       '<form id="map-address-form" class="map-address-form">' +
@@ -3175,6 +3251,12 @@
             ? '<p class="map-points-value">' +
               icon("wallet") +
               esc(selectedValueLabel) +
+              "</p>"
+            : "") +
+          (pointsPromotionLabel(selected)
+            ? '<p class="map-points-promotion">' +
+              icon("spark") +
+              esc(pointsPromotionLabel(selected)) +
               "</p>"
             : "") +
           "</div>" +
@@ -3511,6 +3593,45 @@
     pending.reject(new Error(message || "高德联网请求失败"));
   };
 
+  function normalizeAmapWeather(payload) {
+    const forecast =
+      payload && payload.forecasts && payload.forecasts[0]
+        ? payload.forecasts[0]
+        : null;
+    if (!forecast || !Array.isArray(forecast.casts)) return [];
+    return forecast.casts.map((cast) => ({
+      date: cast.date || "",
+      dayWeather: cleanHotelText(cast.dayweather),
+      nightWeather: cleanHotelText(cast.nightweather),
+      dayTemp: Number(cast.daytemp) || null,
+      nightTemp: Number(cast.nighttemp) || null,
+      dayWind: cleanHotelText(cast.daywind),
+      dayPower: cleanHotelText(cast.daypower),
+      source: "高德天气"
+    }));
+  }
+
+  function weatherForDate(weather, date, index) {
+    if (!Array.isArray(weather) || !weather.length) return null;
+    return (
+      weather.find((item) => item.date === date) ||
+      weather[Math.min(index, weather.length - 1)] ||
+      null
+    );
+  }
+
+  function weatherSummary(weather) {
+    if (!weather) return "";
+    const temperatures =
+      weather.dayTemp != null || weather.nightTemp != null
+        ? (weather.dayTemp == null ? "" : weather.dayTemp + "°") +
+          (weather.nightTemp == null ? "" : " / " + weather.nightTemp + "°")
+        : "";
+    return [weather.dayWeather, temperatures, weather.dayWind, weather.dayPower]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   function hasFlyAiBridge() {
     return Boolean(
       window.AndroidFlyAi &&
@@ -3520,8 +3641,6 @@
 
   function flyAiCacheTtl(tool) {
     if (tool === "get_marriott_hotel_info") return 7 * 24 * 60 * 60 * 1000;
-    if (tool === "search_poi") return 24 * 60 * 60 * 1000;
-    if (tool === "fliggy_ai_search") return 6 * 60 * 60 * 1000;
     if (tool === "search_domestic_train" || tool === "search_flight") {
       return 12 * 60 * 60 * 1000;
     }
@@ -3617,37 +3736,98 @@
   const meituanPendingRequests = new Map();
   let meituanRequestSequence = 0;
 
-  function requestMeituanRestaurants(cityName) {
+  function parseMeituanGuideText(value) {
+    let text = String(value || "")
+      .replace(/<\/?answer>/gi, "")
+      .replace(/```(?:json)?/gi, "")
+      .trim();
+    if (!text) throw new Error("美团酒旅 Skill 返回为空");
+    try {
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start >= 0 && end > start) text = text.slice(start, end + 1);
+      const parsed = JSON.parse(text);
+      const normalizeItems = (items) =>
+        (Array.isArray(items) ? items : [])
+          .map((item) => ({
+            name: cleanHotelText(item && item.name),
+            address: cleanHotelText(item && item.address),
+            reason: cleanHotelText(item && (item.reason || item.description)),
+            cuisine: cleanHotelText(item && item.cuisine),
+            category: cleanHotelText(item && item.category)
+          }))
+          .filter((item) => item.name)
+          .slice(0, 6);
+      const guide = {
+        attractions: normalizeItems(parsed.attractions),
+        restaurants: normalizeItems(parsed.restaurants)
+      };
+      if (!guide.attractions.length && !guide.restaurants.length) {
+        throw new Error("美团酒旅 Skill 未返回景点或餐厅");
+      }
+      return guide;
+    } catch (error) {
+      throw new Error("美团景点与美食结果格式无法解析");
+    }
+  }
+
+  function buildMeituanGuideQuery(city, draft, interest) {
+    return (
+      "请根据真实旅行供给，为" +
+      city +
+      "推荐最值得去的5个景点和5家本地特色餐厅。" +
+      "用户主要兴趣：" +
+      (interest && interest.label ? interest.label : draft.interest || "城市漫游") +
+      "；旅行节奏：" +
+      plannerPaceLabel(draft.pace) +
+      "；旅行天数：" +
+      draft.days +
+      "天；补充需求：" +
+      (draft.notes || "无") +
+      "。餐厅优先考虑大众点评必吃榜或本地高口碑，只有确认上榜时才标注。" +
+      "只输出严格JSON，不要Markdown，不要解释。格式：" +
+      '{"attractions":[{"name":"","address":"","reason":""}],"restaurants":[{"name":"","address":"","cuisine":"","reason":""}]}'
+    );
+  }
+
+  function requestMeituanGuide(cityName, draft, interest) {
     const city = String(cityName || "").trim();
-    if (!city) return Promise.reject(new Error("缺少餐饮查询城市"));
-    const cached = meituanRestaurantCache[city];
+    if (!city) return Promise.reject(new Error("缺少旅行内容查询城市"));
+    const query = buildMeituanGuideQuery(city, draft, interest);
+    const cacheKey = [
+      city,
+      draft.days || 3,
+      draft.pace || "relaxed",
+      interest && interest.label,
+      draft.notes || ""
+    ].join("|");
+    const cached = meituanGuideCache[cacheKey];
     if (
       cached &&
-      cached.text &&
+      cached.guide &&
       Date.now() - Number(cached.savedAt || 0) < 7 * 24 * 60 * 60 * 1000
     ) {
-      return Promise.resolve(cached.text);
+      return Promise.resolve(cached.guide);
     }
     if (
       !window.AndroidMeituanTravel ||
       typeof window.AndroidMeituanTravel.query !== "function"
     ) {
-      return Promise.reject(new Error("美团餐饮查询仅在安装后的 Android App 中可用"));
+      return Promise.reject(new Error("美团景点与美食查询仅在 Android App 中可用"));
     }
-    const query =
-      "请推荐" +
-      city +
-      "本地特色餐厅5-8家，优先包含大众点评必吃榜相关餐厅。" +
-      "每家写清餐厅名、菜系、商圈、评分、人均、地址和营业时间。" +
-      "只有能够确认属于必吃榜时才标注“必吃榜”；不能确认时必须明确说明。" +
-      "不要编造未返回的评分、价格或榜单信息。";
     return new Promise((resolve, reject) => {
       const requestId = "meituan-" + ++meituanRequestSequence;
       const timer = window.setTimeout(() => {
         meituanPendingRequests.delete(requestId);
-        reject(new Error("美团餐饮查询超时"));
+        reject(new Error("美团景点与美食查询超时"));
       }, 130000);
-      meituanPendingRequests.set(requestId, { resolve, reject, timer, city });
+      meituanPendingRequests.set(requestId, {
+        resolve,
+        reject,
+        timer,
+        city,
+        cacheKey
+      });
       try {
         window.AndroidMeituanTravel.query(requestId, city, query);
       } catch (error) {
@@ -3668,31 +3848,20 @@
       if (Number(payload.code) !== 0 || !payload.data) {
         throw new Error(payload.msg || "美团酒旅 Skill 没有返回结果");
       }
-      const text = markdownToReadableText(payload.data).replace(
-        /<\/?answer>/gi,
-        ""
-      ).trim();
-      if (!text) throw new Error("美团酒旅 Skill 返回为空");
-      if (
-        text.length < 80 ||
-        /前往美团app首页|联系客服|小团不太了解|无法回答/.test(text)
-      ) {
-        throw new Error("美团酒旅 Skill 未返回有效餐厅列表");
-      }
-      const city = pending.city || "";
-      if (city) {
-        meituanRestaurantCache[city] = {
+      const guide = parseMeituanGuideText(payload.data);
+      if (pending.cacheKey) {
+        meituanGuideCache[pending.cacheKey] = {
           savedAt: Date.now(),
-          text
+          guide
         };
-        meituanRestaurantCache = Object.fromEntries(
-          Object.entries(meituanRestaurantCache)
+        meituanGuideCache = Object.fromEntries(
+          Object.entries(meituanGuideCache)
             .sort((a, b) => Number(b[1].savedAt || 0) - Number(a[1].savedAt || 0))
             .slice(0, 30)
         );
-        safeWrite("lvban.meituanRestaurantCache.v1", meituanRestaurantCache);
+        safeWrite("lvban.meituanGuideCache.v1", meituanGuideCache);
       }
-      pending.resolve(text);
+      pending.resolve(guide);
     } catch (error) {
       pending.reject(error);
     }
@@ -4432,7 +4601,7 @@
       : [];
     const publicScore = LOGIC.scoreEvidence(insightReviews);
     const valueInfo = pointsValuation(hotel);
-    const flashComparison = flashSaleComparison(hotel);
+    const pointsPromotion = pointsPromotionForHotel(hotel);
     const isFavorite = favorites.has(hotel.id);
     const isCompared = comparisons.has(hotel.id);
     const bookingUrl =
@@ -4583,6 +4752,21 @@
       "</span></div>" +
       modeTag(hotel.mode) +
       "</div>" +
+      (pointsPromotion
+        ? '<div class="points-promotion-detail"><div><span>积分闪促</span><strong>额外赠 ' +
+          Math.round(pointsPromotion.bonusPoints).toLocaleString("zh-CN") +
+          ' 分</strong></div><p>' +
+          esc(pointsPromotion.title) +
+          (pointsPromotion.validFrom || pointsPromotion.validTo
+            ? " · 有效期 " +
+              esc(formatDate(pointsPromotion.validFrom)) +
+              " 至 " +
+              esc(formatDate(pointsPromotion.validTo))
+            : "") +
+          "。来源：" +
+          esc(pointsPromotion.source) +
+          "。实际到账与会员资格以活动页和万豪官方确认为准。</p></div>"
+        : "") +
       (valueInfo
         ? '<div class="redemption-verdict ' +
           (valueInfo.difference >= 0 ? "is-points" : "is-cash") +
@@ -4632,49 +4816,6 @@
       '" target="_self">' +
       icon("external") +
       "去万豪官方查询</a>" +
-      "</section>" +
-      '<section class="detail-section card flash-sale-card">' +
-      '<div class="section-head"><div><h2>闪促套餐判断</h2><p>飞猪双十一万豪房晚兑换券 · ¥1,088 / 2 晚</p></div><span class="mode-tag">套餐比价</span></div>' +
-      '<div class="flash-sale-metrics"><div><span>套餐均价</span><strong>¥544 / 晚</strong></div><div><span>直接订两晚估算</span><strong>' +
-      (flashComparison ? money(flashComparison.directCost) : "待查价") +
-      "</strong></div></div>" +
-      (flashComparison
-        ? '<div class="flash-sale-verdict ' +
-          (flashComparison.eligibility === "confirmed" &&
-          flashComparison.savings > 0
-            ? "is-confirmed"
-            : flashComparison.savings > 0
-              ? "is-potential"
-              : "is-direct") +
-          '"><strong>' +
-          (flashComparison.eligibility === "excluded"
-            ? "已标记本店不适用"
-            : flashComparison.savings > 0
-              ? flashComparison.eligibility === "confirmed"
-                ? "已核验：套餐约省 " + money(flashComparison.savings)
-                : "可能更划算：套餐或省 " + money(flashComparison.savings)
-              : "按当前房价，直接订更便宜") +
-          "</strong><p>" +
-          (flashComparison.eligibility === "confirmed"
-            ? "你已确认本店可兑换，且目标周末不加价。"
-            : "适用酒店、可兑换库存、周末是否加价必须以飞猪商品页和兑换页为准。") +
-          " 两晚直接订价按当前单晚快照 × 2 估算，不是锁价。</p></div>" +
-          '<button class="btn ' +
-          (flashComparison.eligibility === "confirmed"
-            ? "btn-secondary"
-            : "btn-primary") +
-          ' btn-block" style="margin-top:9px" data-action="toggle-flash-sale-eligibility" data-id="' +
-          esc(hotel.id) +
-          '">' +
-          (flashComparison.eligibility === "confirmed"
-            ? "取消“已核验适用且周末不加价”"
-            : "我已核验：本店可用且周末不加价") +
-          "</button>"
-        : '<p class="micro muted">先更新现金房价，才能判断 ¥1,088 两晚套餐是否比直接订房便宜。</p>') +
-      '<div class="flash-sale-search-query"><span>飞猪内搜索关键词</span><strong>' +
-      esc(hotel.name + " 万豪 1088元两晚 房晚兑换券") +
-      "</strong></div>" +
-      '<p class="micro muted" style="margin-top:9px">飞猪官方 AI 搜索明确不提供双十一券类商品的适用酒店名单、库存和周末加价字段，因此本应用不会伪造自动兑换结论。它会先计算价差，再由你完成一次适用规则核验。</p>' +
       "</section>" +
       '<div class="method-note">' +
       icon("info") +
@@ -5225,7 +5366,13 @@
             (day.date ? " · " + esc(day.date) : "") +
             "</span><strong>" +
             esc(day.title) +
-            "</strong></header>" +
+            "</strong>" +
+            (day.weather
+              ? '<em class="plan-weather">' +
+                esc(weatherSummary(day.weather)) +
+                " · 高德天气</em>"
+              : "") +
+            "</header>" +
             '<div class="plan-entries">' +
             day.entries
               .map((entry) => {
@@ -5248,26 +5395,49 @@
     );
   }
 
+  function renderMeituanAttractions(plan) {
+    const attractions = (plan && plan.meituanGuide && plan.meituanGuide.attractions) || [];
+    return (
+      '<section class="detail-section card restaurant-section meituan-attractions-section">' +
+      '<div class="section-head"><div><h2>美团推荐景点</h2><p>景点内容由美团酒旅 Skill 决定，位置由高德匹配</p></div><span class="mode-tag">美团 + 高德</span></div>' +
+      (attractions.length
+        ? '<div class="restaurant-list">' +
+          attractions
+            .map((item, index) => {
+              return (
+                '<article class="restaurant-card"><div><strong>' +
+                (index + 1) +
+                ". " +
+                esc(item.name) +
+                "</strong><p>" +
+                esc(item.reason || item.category || "") +
+                (item.address ? " · " + esc(item.address) : "") +
+                "</p><span>高德位置：" +
+                (item.amapLocated
+                  ? "已定位"
+                  : "暂未匹配，出发前请复核地址") +
+                "</span></div>" +
+                (Number(item.rating) > 0
+                  ? '<em>' + Number(item.rating).toFixed(1) + " 分</em>"
+                  : "") +
+                "</article>"
+              );
+            })
+            .join("") +
+          "</div>"
+        : '<p class="micro muted">美团暂未返回景点建议。' +
+          esc(plan.meituanGuideError || "") +
+          "</p>") +
+      "</section>"
+    );
+  }
+
   function renderRestaurantRecommendations(plan) {
     const restaurants = (plan && plan.restaurants) || [];
-    const meituanText = String((plan && plan.meituanRestaurantText) || "").trim();
-    const meituanError = String((plan && plan.meituanRestaurantError) || "").trim();
     return (
       '<section class="detail-section card restaurant-section">' +
-      '<div class="section-head"><div><h2>' +
-      (meituanText ? "大众点评必吃榜与本地餐饮" : "本地餐饮推荐") +
-      "</h2><p>" +
-      (meituanText
-        ? "来自美团酒旅 Skill 的联网结果"
-        : "结合目的地、酒店位置与公开商户信息") +
-      '</p></div><span class="mode-tag">' +
-      (meituanText ? "美团酒旅 Skill" : "飞猪/高德回退") +
-      "</span></div>" +
-      (meituanText
-        ? '<div class="meituan-restaurant-copy">' +
-          esc(meituanText).replace(/\n/g, "<br />") +
-          "</div>"
-        : restaurants.length
+      '<div class="section-head"><div><h2>大众点评必吃榜与本地餐饮</h2><p>餐厅由美团酒旅 Skill 决定，距离由高德定位计算</p></div><span class="mode-tag">美团 + 高德</span></div>' +
+      (restaurants.length
         ? '<div class="restaurant-list">' +
           restaurants
             .map((restaurant) => {
@@ -5275,10 +5445,10 @@
                 '<article class="restaurant-card"><div><strong>' +
                 esc(restaurant.name) +
                 "</strong><p>" +
-                esc(restaurant.category || "本地餐饮") +
+                esc(restaurant.reason || restaurant.category || "本地餐饮") +
                 (restaurant.address ? " · " + esc(restaurant.address) : "") +
                 "</p><span>" +
-                esc(restaurant.source || "公开搜索结果") +
+                esc(restaurant.source || "美团酒旅 Skill") +
                 (Number.isFinite(Number(restaurant.distanceFromHotelKm))
                   ? " · 距建议酒店约 " +
                     Number(restaurant.distanceFromHotelKm).toFixed(1) +
@@ -5293,21 +5463,12 @@
             })
             .join("") +
           "</div>"
-        : '<p class="micro muted">本次没有匹配到可靠的餐饮商户结果。可补充“想吃什么菜系”后重新规划。</p>') +
-      (meituanError
-        ? '<p class="micro muted" style="margin-top:9px">美团餐饮查询未成功：' +
-          esc(meituanError) +
-          "</p>"
-        : "") +
+        : '<p class="micro muted">美团暂未返回可用餐厅。' +
+          esc(plan.meituanGuideError || "") +
+          "</p>") +
       '<div class="restaurant-source-note">' +
       icon("info") +
-      "<span>" +
-      (meituanText
-        ? "文字、评分、人均与榜单标识均来自美团酒旅 Skill 返回结果，更新于 " +
-          esc(formatDate(plan.meituanUpdatedAt)) +
-          "。仅对原文明确标注“必吃榜”的餐厅作相应展示；营业时间和团购状态请在美团/大众点评再次确认。"
-        : "美团酒旅 Skill 暂未返回可用结果，当前餐厅来自飞猪与高德公开搜索，不冒充大众点评必吃榜。") +
-      "</span></div>" +
+      "<span>餐厅名单来自美团酒旅 Skill，高德用于匹配坐标并计算到建议酒店的直线距离；营业时间、排队和必吃榜资格请以美团/大众点评门店页复核。</span></div>" +
       "</section>"
     );
   }
@@ -5333,7 +5494,7 @@
           ? travelStyleLabel(plan.travelStyle)
           : travelStyleLabel(state.params.travelStyle)
       ) +
-      '</p></div><span class="source-badge">高德 + 飞猪 + 美团 + DeepSeek</span></div>' +
+      '</p></div><span class="source-badge">美团景点餐饮 · 高德地图天气路线 · DeepSeek 汇总</span></div>' +
       (plan.notes
         ? '<p class="plan-user-note"><strong>补充需求</strong> ' +
           esc(plan.notes) +
@@ -5391,9 +5552,6 @@
               ? "预算内 · 余 " + money(plan.budget - plan.totalCost)
               : "超预算 " + money(plan.totalCost - plan.budget)
             : "未设置预算") +
-          (plan.flashSaleApplied
-            ? " · 已计闪促省 " + money(plan.flashSaleSavings)
-            : "") +
           "</em></div>"
         : "") +
       (plan.aiBrief
@@ -5401,11 +5559,7 @@
           esc(plan.aiBrief) +
           "</p></div>"
         : "") +
-      (plan.flyAiBrief
-        ? '<details class="flyai-brief"><summary>飞猪 AI 逐日建议（AI 生成，出发前核验）</summary><div>' +
-          esc(markdownToReadableText(plan.flyAiBrief)) +
-          "</div></details>"
-        : "") +
+      renderMeituanAttractions(plan) +
       renderRestaurantRecommendations(plan) +
       '<div class="plan-hotel-row">' +
       '<div><span class="micro muted">本次建议入住</span><strong>' +
@@ -5449,9 +5603,6 @@
                 " · 预计" +
                 money(option.totalCost) +
                 (option.withinBudget ? "" : "（超预算）") +
-                (option.flashSaleApplied
-                  ? " · 已计闪促省" + money(option.flashSaleSavings)
-                  : "") +
                 "</option>"
               );
             })
@@ -5469,7 +5620,7 @@
       "</div>" +
       '<div class="method-note">' +
       icon("source") +
-      "<span>酒店与景点事实来自飞猪/高德联网搜索，餐饮榜单来自美团酒旅 Skill；DeepSeek 复合攻略和飞猪 AI 文字均为生成式建议，不代表实时班次、房态或官方承诺。生成时间 " +
+      "<span>景点与餐饮名单来自美团酒旅 Skill；坐标、天气、市内距离和逐日编排采用高德地图结果；酒店和交通参考来自飞猪；DeepSeek 只负责最终汇总。AI 汇总不代表实时班次、房态或官方承诺。生成时间 " +
       esc(formatDate(plan.generatedAt)) +
       "。营业时间、票价、余票、路况和最终房价请在出发前再次核验。</span>" +
       "</div></section>"
@@ -5483,21 +5634,18 @@
       ? LOGIC.getDestination(plan.destinationId)
       : null;
     if (!plan || !hotel || !destination) return;
-    const baseCost = LOGIC.calculateTripCost(destination, hotel, {
+    const cost = LOGIC.calculateTripCost(destination, hotel, {
       departure: plan.origin,
       days: plan.days.length,
       people: plan.people || 2,
       rooms: plan.rooms || 1,
       budget: plan.budget || 0
     });
-    const cost = applyConfirmedFlashSaleCost(hotel, baseCost);
     const totalCost = plannerTotalCost(cost, plan.transport, plan.people);
     plan.hotelId = hotel.id;
     plan.hotelName = hotel.name;
     plan.totalCost = totalCost;
     plan.lodgingCost = cost.lodging;
-    plan.flashSaleApplied = Boolean(cost.flashSaleApplied);
-    plan.flashSaleSavings = cost.flashSaleSavings || 0;
     const option = (plan.hotelOptions || []).find(
       (item) => item.hotelId === hotel.id
     );
@@ -5591,7 +5739,7 @@
           "</div>"
         : "") +
       (state.plannerLoading
-        ? '<div class="planner-status loading">正在查询酒店、景点、交通、美团餐饮与高德路线，并生成 DeepSeek 复合攻略。首次查询通常需要 20—120 秒，后续会使用本地缓存…</div>'
+        ? '<div class="planner-status loading">正在用美团确定景点与餐饮，用高德匹配坐标、天气和逐日路线，再由 DeepSeek 汇总；同时核验酒店与交通。首次查询通常需要 20—120 秒，后续会使用本地缓存…</div>'
         : "") +
       "</section>" +
       renderTripPlan(state.tripPlan)
@@ -5725,6 +5873,7 @@
         name: cleanHotelText(place.name),
         category: cleanHotelText(place.category || place.type || "本地餐饮"),
         address: cleanHotelText(place.address || ""),
+        reason: cleanHotelText(place.reason || place.description || ""),
         rating: Number.isFinite(Number(place.rating))
           ? Number(place.rating)
           : null,
@@ -5735,6 +5884,90 @@
         source: place.source || "公开餐饮搜索结果",
         bookingUrl: place.bookingUrl || null
       }));
+  }
+
+  function classifyMeituanAttraction(item) {
+    const text = String((item && (item.name + item.reason + item.category)) || "");
+    if (/博物馆|古城|古镇|寺|陵|遗址|城墙|故居|历史|人文|纪念馆/.test(text)) {
+      return "名胜古迹";
+    }
+    if (/公园|山|湖|森林|湿地|风景|自然|河|岛|园/.test(text)) {
+      return "自然风光";
+    }
+    return "城市体验";
+  }
+
+  function amapPoiForGuideItem(item, payload) {
+    const pois = (payload && payload.pois) || [];
+    const target = normalizeHotelKey(item && item.name);
+    const match =
+      pois.find((poi) => normalizeHotelKey(poi.name) === target) ||
+      pois.find((poi) => {
+        const name = normalizeHotelKey(poi.name);
+        return (
+          name.length >= 4 &&
+          target.length >= 4 &&
+          (name.includes(target) || target.includes(name))
+        );
+      }) ||
+      pois[0] ||
+      null;
+    if (!match || !match.location) return null;
+    const parts = String(match.location).split(",").map(Number);
+    if (!Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null;
+    return {
+      location: parts,
+      amapName: cleanHotelText(match.name),
+      address: cleanHotelText(
+        item.address || (match.address === [] ? "" : match.address) || ""
+      ),
+      type: cleanHotelText(match.type),
+      rating:
+        match.biz_ext && Number.isFinite(Number(match.biz_ext.rating))
+          ? Number(match.biz_ext.rating)
+          : null
+    };
+  }
+
+  async function resolveMeituanGuidePlaces(destination, guide) {
+    const enrich = async (items, kind) => {
+      const results = await Promise.allSettled(
+        items.map((item) =>
+          requestAmap("place/text", {
+            keywords: item.name,
+            city: destination.name,
+            citylimit: "true",
+            offset: "10",
+            page: "1",
+            extensions: "base"
+          })
+        )
+      );
+      return items.map((item, index) => {
+        const result = results[index];
+        const poi =
+          result && result.status === "fulfilled"
+            ? amapPoiForGuideItem(item, result.value)
+            : null;
+        return Object.assign({}, item, {
+          category:
+            kind === "restaurant"
+              ? "当地美食"
+              : classifyMeituanAttraction(item),
+          location: poi ? poi.location : null,
+          address: poi && poi.address ? poi.address : item.address,
+          type: poi ? poi.type : "",
+          rating: poi ? poi.rating : null,
+          source: "美团酒旅 Skill",
+          amapLocated: Boolean(poi)
+        });
+      });
+    };
+    const [attractions, restaurants] = await Promise.all([
+      enrich((guide.attractions || []).slice(0, 6), "attraction"),
+      enrich((guide.restaurants || []).slice(0, 6), "restaurant")
+    ]);
+    return { attractions, restaurants };
   }
 
   function buildTripDays(destination, hotel, places, origin, route, transport) {
@@ -5805,6 +6038,18 @@
       );
     };
     let placeIndex = 0;
+    const usedEntryPlaceKeys = new Set();
+    const addPlaceEntry = (entries, place, time) => {
+      const key = normalizeHotelKey(place && place.name);
+      if (!key || usedEntryPlaceKeys.has(key)) return false;
+      usedEntryPlaceKeys.add(key);
+      entries.push({
+        time,
+        title: place.name,
+        detail: detailForPlace(place)
+      });
+      return true;
+    };
     return Array.from({ length: totalDays }, (_, dayIndex) => {
       const isFirst = dayIndex === 0;
       const isLast = dayIndex === totalDays - 1;
@@ -5842,22 +6087,14 @@
         if (places[placeIndex] && !isLast) {
           const place = places[placeIndex];
           placeIndex += 1;
-          entries.push({
-            time: "傍晚",
-            title: place.name,
-            detail: detailForPlace(place)
-          });
+          addPlaceEntry(entries, place, "傍晚");
         }
       }
       if (isLast) {
         if (places[placeIndex]) {
           const lastPlace = places[placeIndex];
           placeIndex += 1;
-          entries.push({
-            time: "上午",
-            title: lastPlace.name,
-            detail: detailForPlace(lastPlace)
-          });
+          addPlaceEntry(entries, lastPlace, "上午");
         }
         entries.push({
           time: "下午",
@@ -5870,11 +6107,7 @@
           const place = places[placeIndex];
           if (!place) break;
           placeIndex += 1;
-          entries.push({
-            time: timeSlots[slot] || "下午",
-            title: place.name,
-            detail: detailForPlace(place)
-          });
+          addPlaceEntry(entries, place, timeSlots[slot] || "下午");
         }
         if (middlePlaces < 3) {
           entries.push({
@@ -5892,6 +6125,12 @@
         });
       }
       if (
+        foodPlace &&
+        entries.some((entry) => entry.title === foodPlace.name)
+      ) {
+        foodAdded = true;
+      }
+      if (
         !foodAdded &&
         !isLast &&
         foodPlace &&
@@ -5901,12 +6140,7 @@
             /当地美食|餐饮|小吃/.test(entry.detail || "")
         )
       ) {
-        entries.push({
-          time: "晚间",
-          title: foodPlace.name,
-          detail: detailForPlace(foodPlace)
-        });
-        foodAdded = true;
+        foodAdded = addPlaceEntry(entries, foodPlace, "晚间");
       }
       return {
         title: isFirst
@@ -5965,27 +6199,6 @@
         draft.date,
         Math.max(1, Number(draft.days) - 1)
       );
-      const aiQuery =
-        draft.date +
-        " 从" +
-        draft.origin +
-        "出发去" +
-        destination.name +
-        "旅行 " +
-        draft.days +
-        " 天，" +
-        draft.people +
-        " 人，总预算约 " +
-        draft.budget +
-        " 元，主要兴趣是" +
-        interest.label +
-        "，" +
-        plannerPaceLabel(draft.pace) +
-        "，酒店偏好是" +
-        travelStyleLabel(draft.travelStyle) +
-        (draft.notes ? "，补充需求：" + draft.notes : "") +
-        "。请优先万豪集团旗下酒店，结合当地季节、景点、交通、天气与体力给出逐日建议；" +
-        "明确标注需要出发前核验的房态、票价、营业时间与交通信息。";
       const settle = (promise) =>
         promise.then(
           (value) => ({ status: "fulfilled", value }),
@@ -5999,23 +6212,8 @@
           sort: "price_asc"
         })
       );
-      const flyAiPoiPromise = settle(
-        requestFlyAi("search_poi", {
-          cityName: destination.name,
-          category: interest.flyaiCategory
-        })
-      );
-      const flyAiRestaurantPromise = settle(
-        requestFlyAi("search_poi", {
-          cityName: destination.name,
-          category: "美食"
-        })
-      );
-      const meituanRestaurantPromise = settle(
-        requestMeituanRestaurants(destination.name)
-      );
-      const flyAiPlanPromise = settle(
-        requestFlyAi("fliggy_ai_search", { query: aiQuery })
+      const meituanGuidePromise = settle(
+        requestMeituanGuide(destination.name, draft, interest)
       );
       const destinationAddress = destination.cityFull || destination.name;
       const [originGeoResult, destinationGeoResult] = await Promise.allSettled([
@@ -6045,50 +6243,12 @@
       if (!destinationLocation) {
         throw new Error("高德未能定位目的地，请改填更具体的城市名");
       }
-      const keywordList = Array.from(
-        new Set(
-          [
-            ...(interest.terms || []),
-            interest.keyword,
-            interest.keyword === "景点" ? null : "景点"
-          ].filter(Boolean)
-        )
-      ).slice(0, 3);
-      const placeTypes =
-        interest.id === "food"
-          ? "050000"
-          : interest.id === "history"
-            ? "140000"
-            : interest.id === "family"
-              ? ""
-              : "110100|110200|110202|110203|110204|110208";
-      const placeQueries = keywordList.map((keyword) => ({
-        keyword,
-        types: placeTypes,
-        category: interest.label
-      }));
-      placeQueries.push(
-        { keyword: "美食", types: "050000", category: "当地美食" },
-        {
-          keyword: "公园",
-          types: "110100|110101|110105|110200",
-          category: "自然风光"
-        },
-        {
-          keyword: "博物馆",
-          types: "140000|140100|140200",
-          category: "名胜古迹"
-        }
-      );
-      const searchPromises = placeQueries.map((query) =>
-        requestAmap("place/text", {
-          keywords: query.keyword,
-          city: destination.name,
-          citylimit: "true",
-          offset: "10",
-          page: "1",
-          extensions: "base",
-          types: query.types
+      const weatherCity =
+        (destinationGeo && destinationGeo.adcode) || destination.name;
+      const weatherPromise = settle(
+        requestAmap("weather/weatherInfo", {
+          city: weatherCity,
+          extensions: "all"
         })
       );
       const routePromise = originLocation
@@ -6120,23 +6280,17 @@
         })
       );
       const [
-        searchResults,
         routeResult,
         flyAiHotelResult,
-        flyAiPoiResult,
-        flyAiRestaurantResult,
-        flyAiPlanResult,
         flyAiTransportResult,
-        meituanRestaurantResult
+        meituanGuideResult,
+        weatherResult
       ] = await Promise.all([
-        Promise.allSettled(searchPromises),
         routePromise,
         flyAiHotelPromise,
-        flyAiPoiPromise,
-        flyAiRestaurantPromise,
-        flyAiPlanPromise,
         transportPromise,
-        meituanRestaurantPromise
+        meituanGuidePromise,
+        weatherPromise
       ]);
       let hotelMerge = null;
       if (flyAiHotelResult.status === "fulfilled") {
@@ -6151,45 +6305,34 @@
           hotelMerge = null;
         }
       }
-      const amapPlaces = [];
-      searchResults.forEach((result, index) => {
-        if (result.status !== "fulfilled") return;
-        (result.value.pois || []).forEach((poi) => {
-          const normalized = normalizeAmapPoi(
-            poi,
-            placeQueries[index] && placeQueries[index].category
-          );
-          if (normalized) amapPlaces.push(normalized);
-        });
-      });
-      const flyAiPlaces =
-        flyAiPoiResult.status === "fulfilled"
-          ? getFlyAiItems(flyAiPoiResult.value)
-              .map(normalizeFlyAiPoi)
-              .filter(Boolean)
+      const weather =
+        weatherResult.status === "fulfilled"
+          ? normalizeAmapWeather(weatherResult.value)
           : [];
-      const places = mergePlannerPlaces(flyAiPlaces, amapPlaces);
-      const flyAiRestaurantPlaces =
-        flyAiRestaurantResult.status === "fulfilled"
-          ? getFlyAiItems(flyAiRestaurantResult.value)
-              .map(normalizeFlyAiPoi)
-              .filter(Boolean)
-          : [];
-      const restaurantPlaces = mergePlannerPlaces(
-        flyAiRestaurantPlaces,
-        places.filter(isFoodPlace)
+      const weatherError =
+        weatherResult.status === "rejected"
+          ? weatherResult.reason && weatherResult.reason.message
+            ? weatherResult.reason.message
+            : "高德天气暂不可用"
+          : "";
+      let meituanGuide = { attractions: [], restaurants: [] };
+      if (meituanGuideResult.status === "fulfilled") {
+        meituanGuide = await resolveMeituanGuidePlaces(
+          destination,
+          meituanGuideResult.value
+        );
+      }
+      const meituanGuideError =
+        meituanGuideResult.status === "rejected"
+          ? meituanGuideResult.reason &&
+            meituanGuideResult.reason.message
+            ? meituanGuideResult.reason.message
+            : "美团景点与美食查询暂不可用"
+          : "";
+      const places = mergePlannerPlaces(
+        meituanGuide.attractions,
+        meituanGuide.restaurants
       );
-      const meituanRestaurantText =
-        meituanRestaurantResult.status === "fulfilled"
-          ? meituanRestaurantResult.value
-          : "";
-      const meituanRestaurantError =
-        meituanRestaurantResult.status === "rejected"
-          ? meituanRestaurantResult.reason &&
-            meituanRestaurantResult.reason.message
-            ? meituanRestaurantResult.reason.message
-            : "美团餐饮查询暂不可用"
-          : "";
       const routeData =
         routeResult.status === "fulfilled" &&
         routeResult.value.route &&
@@ -6221,7 +6364,7 @@
         ? selectedHotelCandidate.hotel
         : null;
       const restaurants = buildRestaurantRecommendations(
-        restaurantPlaces,
+        meituanGuide.restaurants,
         hotel
       );
       const hotelOptions = hotelCandidates.map((item) => ({
@@ -6237,8 +6380,6 @@
         lodging: item.cost.lodging,
         withinBudget: item.withinBudget,
         noteBoost: item.noteBoost,
-        flashSaleApplied: item.flashSaleApplied,
-        flashSaleSavings: item.flashSaleSavings,
         quality: item.hotel.quality
       }));
       if (hotel) {
@@ -6282,6 +6423,7 @@
       );
       planDays.forEach((day, index) => {
         day.date = addDaysToDate(draft.date, index);
+        day.weather = weatherForDate(weather, day.date, index);
       });
       const amapUri =
         originLocation && destinationLocation
@@ -6301,12 +6443,6 @@
           : null;
       let aiBrief = null;
       let aiError = null;
-      const flyAiBrief =
-        flyAiPlanResult.status === "fulfilled" &&
-        flyAiPlanResult.value &&
-        typeof flyAiPlanResult.value.data === "string"
-          ? flyAiPlanResult.value.data
-          : null;
       try {
         const facts = {
           date: draft.date,
@@ -6321,6 +6457,13 @@
           notes: draft.notes || "",
           route,
           transport,
+          weather,
+          dailyPlan: planDays.map((day) => ({
+            date: day.date,
+            title: day.title,
+            weather: day.weather,
+            entries: day.entries
+          })),
           hotel: hotel
             ? {
                 name: hotel.name,
@@ -6335,20 +6478,17 @@
               }
             : null,
           hotelOptions: hotelOptions.slice(0, 8),
-          places: places.slice(0, 12).map((place) => ({
-            name: place.name,
-            category: place.category,
-            type: place.type,
-            address: place.address,
-            ticketPrice: place.ticketPrice
-          })),
-          restaurants: restaurants.slice(0, 8),
-          meituanRestaurants: meituanRestaurantText.slice(0, 2600)
+          meituanGuide: {
+            attractions: meituanGuide.attractions,
+            restaurants: meituanGuide.restaurants
+          }
         };
         aiBrief = await requestDeepSeek(
-          "请根据下面的事实，写一份复合旅行攻略，包含当地美食、自然风光、名胜古迹、每日节奏、建议酒店与预算取舍。" +
-            "必须覆盖用户备注中的约束和酒店偏好。若偏好为“别具一格”，优先解释设计酒店、历史建筑、度假环境和在地文化体验，同时继续控制预算；若为“性价比和质量平衡”，不要把最低价等同于最高性价比。" +
-            "如事实缺少某一类地点，要明确建议出发前补充核验，不能编造。" +
+          "请汇总下面的结构化事实，写一份完整出行规划。景点和餐厅名单只能采用美团酒旅 Skill 返回的内容；坐标、天气、路线和每日顺序采用了高德地图结果；酒店与交通事实另有来源。" +
+            "你的职责是把这些事实汇总成用户易读的完整方案，不得新增未提供的地点、评分、天气或营业时间。" +
+            "输出必须包含每日天气、上午/下午/晚间安排、当地美食、自然风光或名胜古迹、住宿、预算取舍和出发前核验提醒。" +
+            "必须覆盖用户备注中的约束和酒店偏好。若偏好为“别具一格”，优先解释设计酒店、历史建筑和在地文化体验；若为“性价比和质量平衡”，不要把最低价等同于最高性价比。" +
+            "如某一天高德只给出直线距离或天气超出预报范围，要明确说明。" +
             "用中文分段落写 500—800 字，不使用 Markdown 标记。事实：" +
             JSON.stringify(facts)
         );
@@ -6358,9 +6498,6 @@
       }
       const flyAiErrors = [
         flyAiHotelResult,
-        flyAiPoiResult,
-        flyAiRestaurantResult,
-        flyAiPlanResult,
         flyAiTransportResult
       ]
         .filter((result) => result.status === "rejected")
@@ -6382,29 +6519,20 @@
         hotelName: hotel ? hotel.name : null,
         hotelOptions,
         restaurants,
-        meituanRestaurantText,
-        meituanRestaurantError,
-        meituanUpdatedAt: meituanRestaurantText
-          ? new Date().toISOString()
-          : null,
+        meituanGuide,
+        meituanGuideError,
+        weather,
+        weatherError,
         totalCost: selectedTotalCost,
         lodgingCost: selectedHotelCandidate
           ? selectedHotelCandidate.cost.lodging
           : null,
-        flashSaleApplied: Boolean(
-          selectedHotelCandidate && selectedHotelCandidate.cost.flashSaleApplied
-        ),
-        flashSaleSavings:
-          (selectedHotelCandidate &&
-            selectedHotelCandidate.cost.flashSaleSavings) ||
-          0,
         budget: Number(draft.budget) || 0,
         travelStyle:
           draft.travelStyle === "distinctive" ? "distinctive" : "balanced",
         notes: draft.notes || "",
         amapUri,
         placesCount: places.length,
-        flyAiPlacesCount: flyAiPlaces.length,
         flyAiHotelCount: hotelMerge ? hotelMerge.priced : 0,
         placeCategories: places.map((place) => ({
           name: place.name,
@@ -6412,16 +6540,16 @@
           type: place.type || ""
         })),
         aiBrief,
-        flyAiBrief,
         aiError,
         flyAiErrors,
         generatedAt: new Date().toISOString(),
-        source: "飞猪酒店/景点/交通与 AI + 高德地图与驾车路线 + 本地万豪目录"
+        source:
+          "美团酒旅景点与餐饮 + 高德坐标/天气/路线与日内编排 + 飞猪酒店/交通 + DeepSeek 综合汇总"
       };
       safeWrite("lvban.tripPlan.v1", state.tripPlan);
       if (!places.length) {
         state.plannerError =
-          "路线已返回，但飞猪和高德都没有找到足够的地点。请更换兴趣或稍后重试。";
+          "高德已返回路线，但美团没有返回可用的景点或餐厅。请调整兴趣或稍后重试。";
       }
     } catch (error) {
       state.plannerError =
@@ -6624,8 +6752,8 @@
           (entry) => Object.keys((entry && entry.facilities) || {}).length
         ).length +
         " 家酒店的房型、设施与公开评论资料。其余酒店可联网获取并保存在本机；没有取得公开报价的酒店显示“查价”，不会伪造价格。</p></div>" +
-        '<div class="about-item"><strong>网络与隐私</strong><p>网络权限用于高德地图与路线、飞猪酒店/景点/交通与 AI、美团酒旅 Skill 餐饮推荐、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。</p></div>' +
-        '<div class="about-item"><strong>版本</strong><p>旅伴 0.11.0 · 非万豪官方产品 · 目录时间 ' +
+        '<div class="about-item"><strong>网络与隐私</strong><p>网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。</p></div>' +
+        '<div class="about-item"><strong>版本</strong><p>旅伴 0.12.0 · 非万豪官方产品 · 目录时间 ' +
         esc(formatDate(DATA.updatedAt)) +
         "</p></div></div>"
     );
@@ -6997,21 +7125,6 @@
         showToast("已加入对比");
       }
       persistComparisons();
-      const scrollY = window.scrollY;
-      render();
-      window.scrollTo(0, scrollY);
-      return;
-    }
-    if (action === "toggle-flash-sale-eligibility") {
-      if (!id) return;
-      if (flashSaleEligibility[id] === true) {
-        delete flashSaleEligibility[id];
-        showToast("已取消该酒店的闪促适用核验");
-      } else {
-        flashSaleEligibility[id] = true;
-        showToast("已记录：本店可用且目标周末不加价");
-      }
-      safeWrite("lvban.flashSaleEligibility.v1", flashSaleEligibility);
       const scrollY = window.scrollY;
       render();
       window.scrollTo(0, scrollY);

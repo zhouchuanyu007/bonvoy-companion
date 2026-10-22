@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     // authenticates the client shape; the API key above authorizes the account.
     private static final String FLYAI_SIGN_SECRET = BuildConfig.FLYAI_SIGN_SECRET;
     private static final String FLYAI_USER_AGENT =
-            "BonvoyCompanion/0.11 Android";
+            "BonvoyCompanion/0.12 Android";
     private static final String MEITUAN_TRAVEL_URL =
             "https://mcp-open-cater.meituan.com/v1/api/voyage/openapi/query";
     private static final String MEITUAN_TRAVEL_KEY = BuildConfig.MEITUAN_TRAVEL_KEY;
@@ -96,11 +96,10 @@ public class MainActivity extends Activity {
         AMAP_ALLOWED_PATHS.add("direction/driving");
         AMAP_ALLOWED_PATHS.add("direction/transit/integrated");
         AMAP_ALLOWED_PATHS.add("direction/walking");
+        AMAP_ALLOWED_PATHS.add("weather/weatherInfo");
 
         FLYAI_ALLOWED_TOOLS.add("search_marriott_hotels");
         FLYAI_ALLOWED_TOOLS.add("get_marriott_hotel_info");
-        FLYAI_ALLOWED_TOOLS.add("search_poi");
-        FLYAI_ALLOWED_TOOLS.add("fliggy_ai_search");
         FLYAI_ALLOWED_TOOLS.add("search_domestic_train");
         FLYAI_ALLOWED_TOOLS.add("search_flight");
     }
@@ -872,7 +871,7 @@ public class MainActivity extends Activity {
                     connection.setRequestProperty("Accept", "application/json");
                     connection.setRequestProperty(
                             "User-Agent",
-                            "BonvoyCompanion/0.8 Android"
+                            "BonvoyCompanion/0.12 Android"
                     );
                     int status = connection.getResponseCode();
                     InputStream stream = status >= 200 && status < 300
@@ -1049,7 +1048,7 @@ public class MainActivity extends Activity {
                     connection.setRequestProperty("Accept", "application/json");
                     connection.setRequestProperty(
                             "User-Agent",
-                            "BonvoyCompanion/0.11 Android"
+                            "BonvoyCompanion/0.12 Android"
                     );
                     OutputStream requestBody = connection.getOutputStream();
                     requestBody.write(bytes);

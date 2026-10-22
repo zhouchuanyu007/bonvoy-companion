@@ -1,27 +1,10 @@
 "use strict";
 
-const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const source = fs.readFileSync(
-  path.join(
-    root,
-    "app",
-    "src",
-    "com",
-    "bonvoy",
-    "companion",
-    "MainActivity.java"
-  ),
-  "utf8"
-);
-const keyMatch = source.match(
-  /MEITUAN_TRAVEL_KEY\s*=\s*\n?\s*"([^"]+)"/
-);
-if (!keyMatch) {
-  throw new Error("Missing Meituan travel key");
-}
+const { readSecret } = require("../scripts/local-secrets");
+const key = readSecret("MEITUAN_TRAVEL_KEY", { required: true });
 
 async function main() {
   const response = await fetch(
@@ -29,7 +12,7 @@ async function main() {
     {
       method: "POST",
       headers: {
-        Authorization: keyMatch[1],
+        Authorization: key,
         "SOURCE-FROM-CHANNEL": "clawhub",
         "Content-Type": "application/json"
       },
@@ -54,13 +37,36 @@ async function main() {
   if (payload.code !== 0 || !payload.data) {
     throw new Error("Meituan travel returned no result");
   }
+  const structuredResponse = await fetch(
+    "https://mcp-open-cater.meituan.com/v1/api/voyage/openapi/query",
+    {
+      method: "POST",
+      headers: {
+        Authorization: key,
+        "SOURCE-FROM-CHANNEL": "clawhub",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        city: "南京",
+        channel: "clawhub",
+        query:
+          "请推荐南京最值得去的5个景点和5家本地特色餐厅。只输出严格JSON，不要Markdown，不要解释。格式：{\"attractions\":[{\"name\":\"\",\"address\":\"\",\"reason\":\"\"}],\"restaurants\":[{\"name\":\"\",\"address\":\"\",\"cuisine\":\"\",\"reason\":\"\"}]}"
+      }),
+      signal: AbortSignal.timeout(140000)
+    }
+  );
+  const structuredRaw = await structuredResponse.text();
+  const structuredPayload = JSON.parse(structuredRaw);
+  let structuredPreview = String(structuredPayload.data || "").slice(0, 5000);
   console.log(
     JSON.stringify(
       {
         status: response.status,
         code: payload.code,
         characters: String(payload.data).length,
-        preview: String(payload.data).slice(0, 6000)
+        preview: String(payload.data).slice(0, 2000),
+        structuredCode: structuredPayload.code,
+        structuredPreview
       },
       null,
       2

@@ -1735,9 +1735,9 @@ h3 {
   white-space: normal !important;
 }
 
-.hotel-flash-value {
+.hotel-points-promotion {
   margin: 4px 0 0 !important;
-  color: #8a5928 !important;
+  color: #8a542a !important;
   font-size: 8px !important;
   font-weight: 700;
   line-height: 1.45;
@@ -1821,86 +1821,37 @@ h3 {
   background: #f7f5ef;
 }
 
-.flash-sale-card {
-  margin-top: 14px;
-}
-
-.flash-sale-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.points-promotion-detail {
   margin-top: 11px;
-}
-
-.flash-sale-metrics > div {
-  padding: 9px 10px;
-  border-radius: 11px;
-  background: #f7f3ea;
-}
-
-.flash-sale-metrics span {
-  display: block;
-  color: var(--muted);
-  font-size: 8px;
-}
-
-.flash-sale-metrics strong {
-  display: block;
-  margin-top: 2px;
-  color: var(--navy-900);
-  font-family: Georgia, serif;
-  font-size: 15px;
-}
-
-.flash-sale-verdict {
-  margin-top: 9px;
   padding: 10px 11px;
-  border: 1px solid rgba(18, 39, 60, 0.08);
+  border: 1px solid rgba(181, 111, 50, 0.22);
   border-radius: 13px;
-  background: #fbfaf6;
+  background: rgba(181, 111, 50, 0.08);
 }
 
-.flash-sale-verdict strong {
-  color: var(--navy-900);
-  font-size: 10px;
+.points-promotion-detail > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.flash-sale-verdict p {
-  margin: 4px 0 0 !important;
-  color: #5c5b53 !important;
+.points-promotion-detail span {
+  color: #7a4d28;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.points-promotion-detail strong {
+  color: #743c18;
+  font-size: 13px;
+}
+
+.points-promotion-detail p {
+  margin: 5px 0 0 !important;
+  color: #6b5848 !important;
   font-size: 9px !important;
   line-height: 1.55;
-}
-
-.flash-sale-verdict.is-confirmed {
-  border-color: rgba(74, 113, 82, 0.2);
-  background: rgba(231, 237, 229, 0.58);
-}
-
-.flash-sale-verdict.is-potential {
-  border-color: rgba(181, 147, 83, 0.25);
-  background: rgba(181, 147, 83, 0.09);
-}
-
-.flash-sale-search-query {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-left: 3px solid var(--gold-500);
-  background: #f8f5ed;
-}
-
-.flash-sale-search-query span {
-  display: block;
-  color: var(--muted);
-  font-size: 8px;
-}
-
-.flash-sale-search-query strong {
-  display: block;
-  margin-top: 2px;
-  color: var(--navy-900);
-  font-size: 9px;
-  line-height: 1.5;
 }
 
 .mode-tag {
@@ -2489,6 +2440,22 @@ h3 {
   color: #6f5932;
   font-size: 8px;
   font-weight: 700;
+}
+
+.map-selected .map-points-promotion {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: #8a542a;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.map-points-promotion svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
 }
 
 .map-points-value svg {
@@ -3672,6 +3639,7 @@ h3 {
 
 .plan-day > header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
@@ -3688,6 +3656,14 @@ h3 {
 .plan-day > header strong {
   color: var(--navy-900);
   font-size: 11px;
+}
+
+.plan-day > header .plan-weather {
+  flex-basis: 100%;
+  color: #64726a;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .plan-entries {
