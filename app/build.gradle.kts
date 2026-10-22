@@ -47,8 +47,8 @@ android {
         applicationId = "com.bonvoy.companion"
         minSdk = 23
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.12.0"
+        versionCode = 13
+        versionName = "0.12.1"
         buildConfigField("String", "AMAP_KEY", javaStringLiteral(localSecret("AMAP_KEY")))
         buildConfigField("String", "DEEPSEEK_KEY", javaStringLiteral(localSecret("DEEPSEEK_KEY")))
         buildConfigField("String", "FLYAI_API_KEY", javaStringLiteral(localSecret("FLYAI_API_KEY")))

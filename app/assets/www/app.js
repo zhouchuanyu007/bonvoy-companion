@@ -6845,7 +6845,7 @@
         ).length +
         " 家酒店的房型、设施与公开评论资料。其余酒店可联网获取并保存在本机；没有取得公开报价的酒店显示“查价”，不会伪造价格。</p></div>" +
         '<div class="about-item"><strong>网络与隐私</strong><p>网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。</p></div>' +
-        '<div class="about-item"><strong>版本</strong><p>旅伴 0.12.0 · 非万豪官方产品 · 目录时间 ' +
+        '<div class="about-item"><strong>版本</strong><p>旅伴 0.12.1 · 非万豪官方产品 · 目录时间 ' +
         esc(formatDate(DATA.updatedAt)) +
         "</p></div></div>"
     );

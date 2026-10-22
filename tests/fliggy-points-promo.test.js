@@ -39,7 +39,7 @@ async function callTool(name, args) {
       accept: "application/json, text/event-stream",
       authorization,
       "x-ttid": "ai2c(sk.clawhub)",
-      "user-agent": "BonvoyCompanion/0.12 Android",
+      "user-agent": "BonvoyCompanion/0.12.1 Android",
       "x-flyai-ts": timestamp,
       "x-flyai-nonce": nonce,
       "x-flyai-sign-ver": "7",

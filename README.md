@@ -37,7 +37,7 @@
 
 ## 当前可运行版本
 
-- 安装包由本地构建生成到 `dist/BonvoyCompanion-0.12.0.apk`；`dist/` 不进入 Git，GitHub 发布请使用 Releases。
+- 安装包由本地构建生成到 `dist/BonvoyCompanion-0.12.1.apk`；`dist/` 不进入 Git，GitHub 发布请使用 Releases。
 - 旧版安装包保留在本机 `dist/archive`，只用于回滚，不提交到源码仓库。
 - Android 版本：最低 Android 6.0（API 23），目标 Android 15（API 35）
 - 数据范围：151 个城市、852 家中国境内万豪系酒店
@@ -100,7 +100,7 @@
 安装到已授权的 Android 设备：
 
 ```powershell
-adb install -r .\dist\BonvoyCompanion-0.12.0.apk
+adb install -r .\dist\BonvoyCompanion-0.12.1.apk
 ```
 
 如果手机直接点击 APK 安装失败，请先确认系统为 Android 6.0 或更高版本，并卸载之前的测试版本后再安装。仍然失败时，请记录系统显示的完整错误文字；必要时用上面的 `adb install` 命令复现。
@@ -154,4 +154,4 @@ git push -u origin main
 - 会员账户、积分余额、官方价格提醒和后台推送尚未接入。
 - 美团 POI 数据开放接口文档要求 `appkey`、`appsecret` 和按接口授权的 `session`，当前提供的 Token 属于 AI Hub 酒旅 Skill，二者不能混用。App 已通过官方 `clawhub` 渠道调用酒旅 Skill；如以后要以 POI 接口批量同步评价，需要补充对应开放平台凭证。
 - 飞猪酒店搜索和官方 AI 当前都不返回“额外赠送积分闪促”的活动字段；App 已支持读取可信 `pointsPromotion` 数据并统一标注，但在没有实时公开活动源时不会凭酒店名称或普通会员价推断闪促。
-- 0.12.0 APK 需要通过 Gradle 构建、v1/v2/v3 签名、包内容和 DEX 桥接检查。当前环境的旧模拟器离线，仍缺一次目标真机的安装、定位权限和飞猪酒店直达确认；如手机报错，请提供完整错误文字或截图。
+- 0.12.1 APK 需要通过 Gradle 构建、v1/v2/v3 签名、包内容和 DEX 桥接检查。当前环境的旧模拟器离线，仍缺一次目标真机的安装、定位权限和飞猪酒店直达确认；如手机报错，请提供完整错误文字或截图。
