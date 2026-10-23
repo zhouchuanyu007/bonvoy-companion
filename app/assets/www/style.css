@@ -4986,6 +4986,8 @@ h4,
   grid-template-columns: 250px minmax(0, 1fr);
   gap: 24px;
   padding: 20px 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 300px;
   border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
@@ -5398,6 +5400,7 @@ img[hidden] { display: none; }
   .directory-result-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .directory-entry-head p { font-size: 11px; }
   .directory-price strong { font-size: 20px; }
+  .directory-entry { contain-intrinsic-size: 0 444px; }
   .hotel-detail-hero { margin-inline: -20px; padding: 24px 20px; }
   .hotel-detail-hero h1 { font-size: 28px; }
   .hotel-summary-cell { padding: 16px 8px; }

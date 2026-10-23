@@ -3,7 +3,7 @@
 
   const DATA = window.APP_DATA;
   const LOGIC = window.APP_LOGIC;
-  const BUNDLED_HOTEL_INSIGHTS = window.APP_HOTEL_INSIGHTS || {
+  let BUNDLED_HOTEL_INSIGHTS = window.APP_HOTEL_INSIGHTS || {
     hotels: {}
   };
   const BUNDLED_POINTS_PROMOTIONS = window.APP_POINTS_PROMOTIONS || {
@@ -25,6 +25,7 @@
       window.AndroidConfig.isKeylessBuild()
   );
   const MAP_ADDRESS_RADIUS_KM = 12;
+  const HOTEL_INSIGHTS_SCRIPT = "hotel-insights.js?v=0.12.1-performance-1";
   const DEFAULT_PREFS = {
     departure: "上海",
     month: 11,
@@ -838,10 +839,14 @@
   async function loadHotelInsight(hotelId, options) {
     const hotel = LOGIC.getHotel(hotelId);
     if (!hotel) return null;
+    const force = Boolean(options && options.force);
+    if (!force && hotelInsightCache[hotel.id]) {
+      return hotelInsightCache[hotel.id];
+    }
     if (!hasFlyAiBridge()) {
       throw new Error("酒店设施与真实评价联网仅在 Android App 中可用");
     }
-    const force = Boolean(options && options.force);
+    await loadHotelInsightsBundle();
     if (!force && hotelInsightCache[hotel.id]) {
       return hotelInsightCache[hotel.id];
     }
@@ -1412,6 +1417,41 @@
   let amapPromise = null;
   let flyAiRequestSequence = 0;
   const flyAiPending = new Map();
+  let hotelInsightsBundlePromise = null;
+  let hotelInsightsBundleReady = Boolean(window.APP_HOTEL_INSIGHTS);
+
+  function mergeBundledHotelInsights(payload) {
+    BUNDLED_HOTEL_INSIGHTS = payload && payload.hotels
+      ? payload
+      : { hotels: {} };
+    Object.assign(hotelInsightCache, BUNDLED_HOTEL_INSIGHTS.hotels || {});
+    hotelInsightsBundleReady = true;
+    return BUNDLED_HOTEL_INSIGHTS;
+  }
+
+  function loadHotelInsightsBundle() {
+    if (hotelInsightsBundleReady) {
+      return Promise.resolve(BUNDLED_HOTEL_INSIGHTS);
+    }
+    if (hotelInsightsBundlePromise) return hotelInsightsBundlePromise;
+    if (!document.createElement || !document.head) {
+      return Promise.reject(new Error("酒店详情资料暂不可用"));
+    }
+    hotelInsightsBundlePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = HOTEL_INSIGHTS_SCRIPT;
+      script.async = true;
+      script.onload = () => {
+        resolve(mergeBundledHotelInsights(window.APP_HOTEL_INSIGHTS));
+      };
+      script.onerror = () => {
+        hotelInsightsBundlePromise = null;
+        reject(new Error("酒店详情资料加载失败"));
+      };
+      document.head.appendChild(script);
+    });
+    return hotelInsightsBundlePromise;
+  }
 
   function esc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, (character) => {
@@ -2036,7 +2076,7 @@
       esc(hotel.imageUrl) +
       '" alt="' +
       esc(hotel.name || "酒店照片") +
-      '"' +
+        '" decoding="async" fetchpriority="low"' +
       (loading ? ' loading="' + loading + '"' : "") +
       " /></div>"
     );
@@ -2071,11 +2111,12 @@
       ).join("") + '</div></section>' +
       '<section class="home-hero">' +
       (hasPropertyPhoto(featuredHotel)
-        ? '<img class="home-hero-image" data-hotel-photo fetchpriority="high" src="' +
+        ? '<img class="home-hero-image" data-hotel-photo src="' +
           esc(featuredHotel.imageUrl) +
           '" alt="' +
           esc(featuredHotel.name || "酒店照片") +
-          '" />'
+          '" decoding="async" fetchpriority="high"' +
+          ' />'
         : "") +
       '<div class="home-hero-content"><span class="eyebrow">' +
       esc(featuredHotel ? featuredHotel.brand : "万豪旅享家") +

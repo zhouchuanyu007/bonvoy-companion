@@ -8,6 +8,40 @@ const vm = require("node:vm");
 
 const www = path.join(__dirname, "..", "app", "assets", "www");
 
+test("hotel insight bundle is deferred until a hotel detail is opened", () => {
+  const html = fs.readFileSync(path.join(www, "index.html"), "utf8");
+  const source = fs.readFileSync(path.join(www, "app.js"), "utf8");
+  assert.doesNotMatch(html, /<script[^>]+src=["']hotel-insights\.js/);
+  assert.match(source, /loadHotelInsightsBundle/);
+  assert.doesNotMatch(source, /if \(state\.route === "hotel" && !hotelInsightsBundleReady\)/);
+});
+
+test("directory photos opt into asynchronous decoding", () => {
+  const source = fs.readFileSync(path.join(www, "app.js"), "utf8");
+  assert.match(source, /data-hotel-photo[^>]+decoding=["']async["']/);
+  assert.match(source, /data-hotel-photo[^>]+fetchpriority=["']low["']/);
+});
+
+test("home hero photo emits one high fetch priority attribute", () => {
+  const source = fs.readFileSync(path.join(www, "app.js"), "utf8");
+  const heroSource = source.slice(source.indexOf("function renderHome()"), source.indexOf("function renderDestination()"));
+  assert.equal((heroSource.match(/fetchpriority=["']high["']/g) || []).length, 1);
+});
+
+test("offscreen directory cards can skip layout and paint work", () => {
+  const style = fs.readFileSync(path.join(www, "style.css"), "utf8");
+  assert.match(style, /\.directory-entry\s*\{[^}]*content-visibility:\s*auto/s);
+  assert.match(style, /\.directory-entry\s*\{[^}]*contain-intrinsic-size:\s*[^;}]+/s);
+});
+
+test("mobile directory cards reserve their real multi-line height", () => {
+  const style = fs.readFileSync(path.join(www, "style.css"), "utf8");
+  assert.match(
+    style,
+    /@media\s*\(max-width:\s*600px\)[\s\S]*?\.directory-entry\s*\{[\s\S]*?contain-intrinsic-size:\s*0\s+444px/
+  );
+});
+
 // Execute the real renderers and delegated handlers without network or native bridges.
 function boot({ emptyCatalog = false } = {}) {
   const elements = new Map();
