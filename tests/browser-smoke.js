@@ -272,13 +272,19 @@ class CdpClient {
               }
             };
           } else if (path === "weather/weatherInfo") {
+            const weatherBase = new Date();
+            const weatherDate = (offset) => {
+              const date = new Date(weatherBase);
+              date.setDate(date.getDate() + offset);
+              return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+            };
             payload = {
               status: "1",
               forecasts: [{
                 casts: [
-                  { date: "2026-10-22", dayweather: "多云", nightweather: "晴", daytemp: "21", nighttemp: "13", daywind: "东北", daypower: "1-3" },
-                  { date: "2026-10-23", dayweather: "小雨", nightweather: "阴", daytemp: "19", nighttemp: "12", daywind: "东", daypower: "1-3" },
-                  { date: "2026-10-24", dayweather: "晴", nightweather: "晴", daytemp: "22", nighttemp: "14", daywind: "东南", daypower: "1-3" }
+                  { date: weatherDate(0), dayweather: "多云", nightweather: "晴", daytemp: "21", nighttemp: "13", daywind: "东北", daypower: "1-3" },
+                  { date: weatherDate(1), dayweather: "小雨", nightweather: "阴", daytemp: "19", nighttemp: "12", daywind: "东", daypower: "1-3" },
+                  { date: weatherDate(2), dayweather: "晴", nightweather: "晴", daytemp: "22", nighttemp: "14", daywind: "东南", daypower: "1-3" }
                 ]
               }]
             };
@@ -608,7 +614,7 @@ class CdpClient {
     }
 
     const syncState = await client.evaluate(
-      "(()=>{const destinationId=document.querySelector('#map-city-select').value;const activeId=document.querySelector('.amap-price-marker')?.dataset.hotelId;const hotel=APP_DATA.hotels.find(h=>h.id===activeId)||APP_DATA.hotels.find(h=>h.destinationId===destinationId);if(!hotel)return {ok:false};window.onNativeHotelSyncResult(JSON.stringify({destinationId,checkIn:'2026-10-22',checkOut:'2026-10-23',total:1,hotels:[{id:hotel.id,name:hotel.name,nameEn:hotel.nameEn,brandId:hotel.brandId,brandName:hotel.brand,latitude:hotel.coords.latitude,longitude:hotel.coords.longitude,price:688,totalPrice:799,pointsPrice:22000,pointsPromotion:{bonusPoints:3000,title:'额外赠送3000积分',validTo:'2026-11-30',source:'测试官方活动'},rating:hotel.rating,reviewCount:hotel.reviewCount,seoNickname:'test'}]}));return {ok:true,id:hotel.id,price:hotel.price,pointsPrice:hotel.pointsPrice,status:document.querySelector('.map-filter-card .micro')?.textContent};})()"
+      "(()=>{const destinationId=document.querySelector('#map-city-select').value;const activeId=document.querySelector('.amap-price-marker')?.dataset.hotelId;const hotel=APP_DATA.hotels.find(h=>h.id===activeId)||APP_DATA.hotels.find(h=>h.destinationId===destinationId);if(!hotel)return {ok:false};const checkIn=document.querySelector('#map-checkin').value;const date=new Date(checkIn+'T12:00:00');date.setDate(date.getDate()+1);const checkOut=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');window.onNativeHotelSyncResult(JSON.stringify({destinationId,checkIn,checkOut,total:1,hotels:[{id:hotel.id,name:hotel.name,nameEn:hotel.nameEn,brandId:hotel.brandId,brandName:hotel.brand,latitude:hotel.coords.latitude,longitude:hotel.coords.longitude,price:688,totalPrice:799,pointsPrice:22000,pointsPromotion:{bonusPoints:3000,title:'额外赠送3000积分',validTo:'2027-11-30',source:'测试官方活动'},rating:hotel.rating,reviewCount:hotel.reviewCount,seoNickname:'test'}]}));return {ok:true,id:hotel.id,price:hotel.price,pointsPrice:hotel.pointsPrice,status:document.querySelector('.map-filter-card .micro')?.textContent};})()"
     );
     await sleep(450);
     const pointsValueState = await client.evaluate(
@@ -742,7 +748,7 @@ class CdpClient {
     );
     await snap("09-trip");
     await client.evaluate(
-      "(()=>{document.querySelector('#planner-origin').value='上海';document.querySelector('#planner-destination').value='南京';document.querySelector('#planner-date').value='2026-10-22';document.querySelector('#planner-days').value='3';document.querySelector('#planner-people').value='2';document.querySelector('#planner-budget').value='5000';document.querySelector('#planner-interest').value='赏秋、咖啡、博物馆';document.querySelector('#planner-notes').value='想吃本地菜，安排自然风光和名胜古迹，酒店要交通方便';document.querySelector('#planner-pace').value='high';document.querySelector('#planner-form').requestSubmit();})()"
+      "(()=>{const date=new Date();date.setDate(date.getDate()+7);const iso=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');document.querySelector('#planner-origin').value='上海';document.querySelector('#planner-destination').value='南京';document.querySelector('#planner-date').value=iso;document.querySelector('#planner-days').value='3';document.querySelector('#planner-people').value='2';document.querySelector('#planner-budget').value='5000';document.querySelector('#planner-interest').value='赏秋、咖啡、博物馆';document.querySelector('#planner-notes').value='想吃本地菜，安排自然风光和名胜古迹，酒店要交通方便';document.querySelector('#planner-pace').value='high';document.querySelector('#planner-form').requestSubmit();})()"
     );
     await sleep(24000);
     const plannerPlanState = await client.evaluate(

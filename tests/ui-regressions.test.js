@@ -43,7 +43,7 @@ test("mobile directory cards reserve their real multi-line height", () => {
 });
 
 // Execute the real renderers and delegated handlers without network or native bridges.
-function boot({ emptyCatalog = false } = {}) {
+function boot({ emptyCatalog = false, storage = {}, flyAiScript = "" } = {}) {
   const elements = new Map();
   for (const id of ["app-main", "app-header", "bottom-nav", "sheet", "sheet-backdrop", "toast"]) {
     elements.set(id, {
@@ -53,6 +53,7 @@ function boot({ emptyCatalog = false } = {}) {
   }
   const listeners = {};
   const windowListeners = {};
+  const storedValues = new Map(Object.entries(storage));
   const entries = [];
   let current = -1;
   const history = {
@@ -75,9 +76,12 @@ function boot({ emptyCatalog = false } = {}) {
       getElementById: (id) => elements.get(id) || null,
       addEventListener: (event, handler) => { listeners[event] = handler; }
     },
-    localStorage: { getItem: () => null, setItem() {} },
+    localStorage: {
+      getItem: (key) => (storedValues.has(key) ? storedValues.get(key) : null),
+      setItem: (key, value) => storedValues.set(key, String(value))
+    },
     addEventListener: (event, handler) => { windowListeners[event] = handler; },
-    setTimeout() {}, clearTimeout() {}, scrollTo() {}
+    setTimeout() {}, clearTimeout() {}, scrollTo() {}, scrollY: 0
   };
   sandbox.window = sandbox;
   const context = vm.createContext(sandbox);
@@ -85,9 +89,14 @@ function boot({ emptyCatalog = false } = {}) {
     if (emptyCatalog && file === "catalog.js") continue;
     vm.runInContext(fs.readFileSync(path.join(www, file), "utf8"), context, { filename: file });
   }
+  if (flyAiScript) {
+    vm.runInContext(flyAiScript, context, { filename: "test-bridges.js" });
+  }
   vm.runInContext(fs.readFileSync(path.join(www, "app.js"), "utf8"), context, { filename: "app.js" });
   return {
     elements, history, listeners,
+    sandbox,
+    storage: storedValues,
     html: () => elements.get("app-main").innerHTML,
     snapshot: () => entries[current],
     click(dataset) {
@@ -99,6 +108,9 @@ function boot({ emptyCatalog = false } = {}) {
     search(query) {
       elements.set("home-directory-query", { value: query });
       listeners.submit({ target: { id: "home-directory-search" }, preventDefault() {} });
+    },
+    destination(name) {
+      return sandbox.APP_DATA.destinations.find((item) => item.name === name);
     }
   };
 }
@@ -149,4 +161,134 @@ test("failed property photos show the unavailable state", () => {
   app.listeners.error({ target: image });
   assert.equal(image.hidden, true);
   assert.equal(fallback, "image-unavailable");
+});
+
+test("check-in confirmation feature is not present", () => {
+  const source = fs.readFileSync(path.join(www, "app.js"), "utf8");
+  assert.doesNotMatch(source, /入住前确认|CHECKLIST_ITEMS|focus-checklist/);
+});
+
+test("city points promotion result is validated and reused from cache", async () => {
+  const app = boot({
+    flyAiScript: `
+      window.__promotionRequests = 0;
+      window.AndroidFlyAi = {
+        request(requestId, tool, argumentsJson) {
+          window.__promotionRequests += 1;
+          const args = JSON.parse(argumentsJson);
+          const destination = APP_DATA.destinations.find((item) => item.name === "上海");
+          const hotel = APP_DATA.hotels.find((item) =>
+            item.destinationId === destination.id &&
+            (!item.openingDate || item.openingDate <= new Date().toISOString().slice(0, 10))
+          );
+          window.__promotionTool = tool;
+          window.__promotionHotel = hotel.name;
+          window.__promotionHotelId = hotel.id;
+          const data = JSON.stringify({
+            promotions: [{
+              hotelName: hotel.name,
+              bonusPoints: 3000,
+              validFrom: "2026-10-01",
+              validTo: "2027-12-31",
+              sourceText: "活动明确标注：入住后额外赠送 3000 万豪积分。",
+              sourceUrl: "https://example.com/marriott-points"
+            }]
+          });
+          Promise.resolve().then(() => {
+            window.onNativeFlyAiResult(
+              requestId,
+              JSON.stringify({ status: 0, message: "success", data })
+            );
+          });
+        }
+      };
+    `
+  });
+  const destination = app.destination("上海");
+  app.click({ nav: "map" });
+  app.click({ action: "sync-points-promotions", id: destination.id });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.sandbox.__promotionRequests, 1);
+  assert.equal(app.sandbox.__promotionTool, "fliggy_ai_search");
+  app.click({
+    action: "select-map-hotel",
+    id: app.sandbox.__promotionHotelId
+  });
+  assert.match(app.html(), /积分闪促：额外赠 3,000 分/);
+  const cache = [...app.storage.entries()].find(([key]) =>
+    key === "lvban.flyPointsPromotionCache.v1"
+  );
+  assert.ok(cache);
+  assert.match(cache[1], /"count":1/);
+  app.click({ action: "sync-points-promotions", id: destination.id });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.sandbox.__promotionRequests, 1);
+});
+
+test("ordinary points and unknown hotels are not mislabeled as bonus promotions", async () => {
+  const app = boot({
+    flyAiScript: `
+      window.__promotionRequests = 0;
+      window.AndroidFlyAi = {
+        request(requestId, tool, argumentsJson) {
+          window.__promotionRequests += 1;
+          const destination = APP_DATA.destinations.find((item) => item.name === "上海");
+          const hotel = APP_DATA.hotels.find((item) => item.destinationId === destination.id);
+          const data = JSON.stringify({
+            promotions: [
+              {
+                hotelName: hotel.name,
+                bonusPoints: 1000,
+                sourceText: "万豪会员入住可获得基础积分。"
+              },
+              {
+                hotelName: "不存在的酒店",
+                bonusPoints: 3000,
+                validTo: "2027-12-31",
+                sourceText: "活动额外赠送 3000 积分。"
+              }
+            ]
+          });
+          Promise.resolve().then(() => {
+            window.onNativeFlyAiResult(
+              requestId,
+              JSON.stringify({ status: 0, data })
+            );
+          });
+        }
+      };
+    `
+  });
+  const destination = app.destination("上海");
+  app.click({ nav: "map" });
+  app.click({ action: "sync-points-promotions", id: destination.id });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.sandbox.__promotionRequests, 1);
+  assert.doesNotMatch(app.html(), /积分闪促：额外赠/);
+  assert.match(app.html(), /暂未返回可核验的额外积分活动/);
+  app.click({ action: "sync-points-promotions", id: destination.id });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.sandbox.__promotionRequests, 1);
+});
+
+test("future hotels are labeled and never sent to FlyAI pricing", async () => {
+  const app = boot({
+    flyAiScript: `
+      window.__hotelPriceRequests = 0;
+      window.AndroidFlyAi = {
+        request() {
+          window.__hotelPriceRequests += 1;
+        }
+      };
+    `
+  });
+  app.click({ nav: "map" });
+  app.click({ action: "set-map-city", id: "chengdu" });
+  assert.match(app.html(), /家尚未开业/);
+  assert.match(app.html(), /已优先标注并跳过飞猪查价/);
+  app.click({ action: "lookup-hotel-price", id: "JZHAS" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.sandbox.__hotelPriceRequests, 0);
 });

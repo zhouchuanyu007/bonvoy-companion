@@ -43,7 +43,7 @@ $releaseDir = Join-Path $root "app\build\outputs\apk\release"
 $signedSource = Join-Path $releaseDir "app-release.apk"
 $unsignedSource = Join-Path $releaseDir "app-release-unsigned.apk"
 $distDir = Join-Path $root "dist"
-$versionName = "0.12.1"
+$versionName = "0.13"
 $keylessBuild = $env:BONVOY_KEYLESS_BUILD -eq "1"
 $artifactSuffix = if ($keylessBuild) { "-keyless" } else { "" }
 

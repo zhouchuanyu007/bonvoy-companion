@@ -25,7 +25,9 @@
       window.AndroidConfig.isKeylessBuild()
   );
   const MAP_ADDRESS_RADIUS_KM = 12;
-  const HOTEL_INSIGHTS_SCRIPT = "hotel-insights.js?v=0.12.1-performance-1";
+  const POINTS_PROMOTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const POINTS_PROMOTION_ERROR_CACHE_TTL_MS = 30 * 60 * 1000;
+  const HOTEL_INSIGHTS_SCRIPT = "hotel-insights.js?v=0.13-performance-1";
   const DEFAULT_PREFS = {
     departure: "上海",
     month: 11,
@@ -102,39 +104,6 @@
       test: (hotel) => Number.isFinite(Number(hotel.price)) && hotel.price > 1500
     }
   ];
-  const CHECKLIST_ITEMS = [
-    {
-      id: "cancellation",
-      title: "核对免费取消截止时间",
-      detail: "把日期写进行程卡，避免临近入住才发现不可退。"
-    },
-    {
-      id: "room",
-      title: "确认床型、人数和加床",
-      detail: "尤其是亲子、三人入住或需要双床的订单。"
-    },
-    {
-      id: "late",
-      title: "确认晚到与保留房间",
-      detail: "晚班机、晚高铁或自驾堵车时提前联系酒店。"
-    },
-    {
-      id: "benefits",
-      title: "确认早餐、酒廊和会员权益",
-      detail: "以官方规则和酒店当日执行为准，不依赖未核验的住客经验。"
-    },
-    {
-      id: "transport",
-      title: "复核最后一公里",
-      detail: "看地铁出口、步行路面、接驳车时刻和停车入口。"
-    },
-    {
-      id: "invoice",
-      title: "保存发票与报销信息",
-      detail: "商务出行提前核对抬头、税号和开票方式。"
-    }
-  ];
-
   const BRAND_NAME_ZH = {
     RZ: "丽思卡尔顿",
     XR: "瑞吉",
@@ -985,6 +954,168 @@
     );
   }
 
+  function pointsPromotionCacheMessage(entry) {
+    if (!entry) return "";
+    if (entry.status === "error") {
+      return (
+        "上次积分活动检索失败：" +
+        (entry.error || "接口未返回结果") +
+        "。失败结果缓存 30 分钟，期间不会重复消耗查询次数。"
+      );
+    }
+    const count = Number(entry.count) || 0;
+    return (
+      (count
+        ? "缓存中有 " + count + " 家酒店明确标注额外赠送积分"
+        : "飞猪检索暂未返回可核验的额外积分活动") +
+      " · 查询于 " +
+      formatDate(new Date(Number(entry.queriedAt))) +
+      " · 24 小时内不会重复查询"
+    );
+  }
+
+  function buildPointsPromotionQuery(destination, hotels, checkIn) {
+    const names = hotels.map((hotel) => hotel.name);
+    return [
+      "你是万豪旅享家积分活动核验助手。请检索飞猪当前可访问的公开活动信息，筛选“入住后额外赠送万豪积分”的闪促。",
+      "城市：" + (destination.cityFull || destination.name),
+      "计划入住日期：" + checkIn,
+      "候选酒店（只能返回下列名称，不得联想或补充酒店）：",
+      names.map((name, index) => index + 1 + ". " + name).join("\n"),
+      "普通会员积分、基础入住积分、积分兑换房、积分抵扣和泛泛的会员权益都不算额外积分闪促。",
+      "只有活动页面或公开检索摘要明确写出酒店、额外积分数量和活动依据时才返回。酒店名必须与候选名称完全一致。",
+      "只返回一个严格 JSON 对象，不要 Markdown、解释或推测。格式：",
+      '{"promotions":[{"hotelName":"候选酒店全名","bonusPoints":3000,"validFrom":"YYYY-MM-DD","validTo":"YYYY-MM-DD","sourceText":"活动页面中的关键原文","sourceUrl":"https://..."}]}',
+      "无法确认时返回：",
+      '{"promotions":[]}'
+    ].join("\n");
+  }
+
+  function syncCityPointsPromotions(destinationId) {
+    const destination = LOGIC.getDestination(destinationId);
+    if (!destination) {
+      showToast("找不到这个城市");
+      return Promise.reject(new Error("城市不存在"));
+    }
+    const checkIn = state.mapCheckIn || defaultTravelDate(1);
+    const cached = readPointsPromotionCache(destination.id, checkIn);
+    if (cached) {
+      state.pointsPromotionSync = {
+        status: cached.status === "error" ? "error" : "success",
+        message: pointsPromotionCacheMessage(cached),
+        destinationId: destination.id,
+        checkIn,
+        updatedAt: new Date(Number(cached.queriedAt)).toISOString()
+      };
+      render();
+      return Promise.resolve(cached);
+    }
+    if (!hasFlyAiBridge()) {
+      const message = "积分闪促联网检索仅在安装后的 Android App 中可用。";
+      state.pointsPromotionSync = {
+        status: "error",
+        message,
+        destinationId: destination.id,
+        checkIn,
+        updatedAt: null
+      };
+      render();
+      return Promise.reject(new Error(message));
+    }
+    const hotels = LOGIC.hotelsFor(destination.id).filter(canQueryHotelPrice);
+    if (!hotels.length) {
+      const message = "本城没有可查价酒店；未开业酒店不会消耗积分活动查询次数。";
+      state.pointsPromotionSync = {
+        status: "success",
+        message,
+        destinationId: destination.id,
+        checkIn,
+        updatedAt: new Date().toISOString()
+      };
+      render();
+      return Promise.resolve(null);
+    }
+    state.pointsPromotionSync = {
+      status: "loading",
+      message: "正在按城市检索飞猪积分闪促，仅发起 1 次请求…",
+      destinationId: destination.id,
+      checkIn,
+      updatedAt: state.pointsPromotionSync.updatedAt
+    };
+    render();
+    const query = buildPointsPromotionQuery(destination, hotels, checkIn);
+    return requestFlyAiWithRetry("fliggy_ai_search", { query }, 1)
+      .then((payload) => {
+        const promotions = {};
+        extractPointsPromotionItems(payload).forEach((item) => {
+          const promotion = pointsPromotionFromEvidence(item, hotels, checkIn);
+          if (!promotion) return;
+          const existing = promotions[promotion.hotelId];
+          if (!existing || promotion.bonusPoints > existing.bonusPoints) {
+            promotions[promotion.hotelId] = promotion;
+          }
+        });
+        const queriedAt = Date.now();
+        const entry = {
+          schemaVersion: 1,
+          status: "success",
+          destinationId: destination.id,
+          destinationName: destination.name,
+          checkIn,
+          queriedAt,
+          expiresAt: queriedAt + POINTS_PROMOTION_CACHE_TTL_MS,
+          count: Object.keys(promotions).length,
+          promotions
+        };
+        writePointsPromotionCache(entry);
+        state.pointsPromotionSync = {
+          status: "success",
+          message: pointsPromotionCacheMessage(entry),
+          destinationId: destination.id,
+          checkIn,
+          updatedAt: new Date(queriedAt).toISOString()
+        };
+        const scrollY = window.scrollY;
+        render();
+        window.scrollTo(0, scrollY);
+        showToast(
+          entry.count
+            ? "已缓存 " + entry.count + " 家酒店的积分闪促"
+            : "飞猪未返回可核验的积分闪促，空结果已缓存"
+        );
+        return entry;
+      })
+      .catch((error) => {
+        const message =
+          error && error.message ? error.message : "积分闪促检索失败";
+        const queriedAt = Date.now();
+        const entry = {
+          schemaVersion: 1,
+          status: "error",
+          destinationId: destination.id,
+          destinationName: destination.name,
+          checkIn,
+          queriedAt,
+          expiresAt: queriedAt + POINTS_PROMOTION_ERROR_CACHE_TTL_MS,
+          count: 0,
+          promotions: {},
+          error: message
+        };
+        writePointsPromotionCache(entry);
+        state.pointsPromotionSync = {
+          status: "error",
+          message: pointsPromotionCacheMessage(entry),
+          destinationId: destination.id,
+          checkIn,
+          updatedAt: new Date(queriedAt).toISOString()
+        };
+        const scrollY = window.scrollY;
+        render();
+        window.scrollTo(0, scrollY);
+        throw error;
+      });
+  }
+
   function findFlyAiHotelItemForHotel(items, hotel) {
     const target = normalizeHotelKey(hotel.name);
     const exact = items.find(
@@ -1023,6 +1154,12 @@
     const destination = hotel ? LOGIC.getDestination(hotel.destinationId) : null;
     if (!hotel || !destination) {
       return Promise.reject(new Error("找不到这家酒店"));
+    }
+    const opening = hotelOpeningInfo(hotel);
+    if (opening.future) {
+      return Promise.reject(
+        new Error(hotel.name + " 尚未开业，预计 " + opening.openingDate + " 开业")
+      );
     }
     if (!hasFlyAiBridge()) {
       return Promise.reject(new Error("飞猪查价仅在安装后的 Android App 中可用"));
@@ -1123,11 +1260,19 @@
     if (state.flyAiFill.active) return;
     const destination = LOGIC.getDestination(destinationId);
     if (!destination) return;
-    const missing = LOGIC.hotelsFor(destination.id).filter(
+    const missingCandidates = LOGIC.hotelsFor(destination.id).filter(
       (hotel) => !hasPrice(hotel)
     );
+    const skippedOpening = missingCandidates.filter(
+      (hotel) => !canQueryHotelPrice(hotel)
+    );
+    const missing = missingCandidates.filter(canQueryHotelPrice);
     if (!missing.length) {
-      showToast("本城酒店都已有价格");
+      showToast(
+        skippedOpening.length
+          ? "本城待补酒店均尚未开业，暂不查询飞猪价格"
+          : "本城酒店都已有价格"
+      );
       return;
     }
     state.flyAiFill = {
@@ -1135,11 +1280,18 @@
       total: missing.length,
       done: 0,
       failed: 0,
+      skipped: skippedOpening.length,
       current: missing[0].name
     };
     state.flyAi = {
       status: "loading",
-      message: "正在逐家补齐 " + destination.name + " 的缺失房价…",
+      message:
+        "正在逐家补齐 " +
+        destination.name +
+        " 的缺失房价…" +
+        (skippedOpening.length
+          ? " 已跳过 " + skippedOpening.length + " 家尚未开业酒店。"
+          : ""),
       updatedAt: state.flyAi.updatedAt
     };
     const scrollY = window.scrollY;
@@ -1171,7 +1323,10 @@
         missing.length +
         " 家取得价格；失败 " +
         state.flyAiFill.failed +
-        " 家。",
+        " 家。" +
+        (skippedOpening.length
+          ? " 已跳过 " + skippedOpening.length + " 家尚未开业酒店。"
+          : ""),
       updatedAt: new Date().toISOString()
     };
     const nextScrollY = window.scrollY;
@@ -1314,7 +1469,6 @@
   let comparisons = new Set(
     safeRead("lvban.compare.v1", []).filter((id) => Boolean(LOGIC.getHotel(id)))
   );
-  let checklist = safeRead("lvban.checklist.v1", {});
   let liveHotelCache = safeRead("lvban.liveHotelCache.v2", {});
   let flyAiHotelCache = safeRead("lvban.flyaiHotelCache.v3", {});
   let hotelInsightCache = Object.assign(
@@ -1323,6 +1477,7 @@
     safeRead("lvban.hotelInsightCache.v1", {})
   );
   let flyAiResponseCache = safeRead("lvban.flyAiResponseCache.v1", {});
+  let pointsPromotionCache = safeRead("lvban.flyPointsPromotionCache.v1", {});
   let meituanGuideCache = safeRead("lvban.meituanGuideCache.v1", {});
   hydrateLiveHotelCache();
   hydrateFlyAiHotelCache();
@@ -1370,6 +1525,13 @@
       done: 0,
       failed: 0,
       current: ""
+    },
+    pointsPromotionSync: {
+      status: "idle",
+      message: "",
+      destinationId: null,
+      checkIn: null,
+      updatedAt: null
     },
     directoryQuery: "",
     directoryRegion: "全国",
@@ -1484,7 +1646,27 @@
     return Number.isFinite(Number(hotel.price)) && Number(hotel.price) > 0;
   }
 
+  function hotelOpeningInfo(hotel) {
+    const raw = String((hotel && hotel.openingDate) || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return { future: false, openingDate: null, label: "" };
+    }
+    const future = raw > formatDate(new Date());
+    return {
+      future,
+      openingDate: raw,
+      label: future ? "预计 " + raw + " 开业" : "已开业"
+    };
+  }
+
+  function canQueryHotelPrice(hotel) {
+    return !hotelOpeningInfo(hotel).future;
+  }
+
   function priceLabel(hotel) {
+    if (!hasPrice(hotel) && hotelOpeningInfo(hotel).future) {
+      return "尚未开业";
+    }
     return hasPrice(hotel) ? money(hotel.price) : "查价";
   }
 
@@ -1537,8 +1719,192 @@
         object.sourceLabel ||
         fallbackSource ||
         "公开活动数据",
+      sourceText: cleanHotelText(
+        object.sourceText || object.evidence || object.sourceSummary || ""
+      ).slice(0, 500),
+      sourceUrl: /^https?:\/\//i.test(String(object.sourceUrl || "").trim())
+        ? String(object.sourceUrl).trim()
+        : null,
+      hotelId: object.hotelId || null,
+      hotelName: cleanHotelText(object.hotelName || object.name || ""),
       fetchedAt: object.fetchedAt || new Date().toISOString()
     };
+  }
+
+  function pointsPromotionCacheKey(destinationId, checkIn) {
+    return String(destinationId || "") + "|" + String(checkIn || "");
+  }
+
+  function parsePointsPromotionJson(value) {
+    if (value && typeof value === "object") return value;
+    const text = String(value || "").trim();
+    if (!text) return null;
+    const candidates = [text];
+    const fenced =
+      text.match(/```(?:json)?\s*([\s\S]*?)```/i) ||
+      text.match(/```(?:json)?\s*([\s\S]*)$/i);
+    if (fenced) candidates.push(fenced[1].trim());
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(text.slice(firstBrace, lastBrace + 1));
+    }
+    const firstBracket = text.indexOf("[");
+    const lastBracket = text.lastIndexOf("]");
+    if (firstBracket >= 0 && lastBracket > firstBracket) {
+      candidates.push(text.slice(firstBracket, lastBracket + 1));
+    }
+    for (const candidate of candidates) {
+      try {
+        return JSON.parse(candidate);
+      } catch (error) {
+        // Free-form answers are intentionally ignored: only structured,
+        // auditable promotion data may reach the UI.
+      }
+    }
+    return null;
+  }
+
+  function extractPointsPromotionItems(payload) {
+    const data = payload && payload.data;
+    const parsed = parsePointsPromotionJson(data);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") {
+      const items =
+        parsed.promotions ||
+        parsed.items ||
+        parsed.activities ||
+        parsed.hotelPromotions;
+      return Array.isArray(items) ? items : [];
+    }
+    return [];
+  }
+
+  function normalizePromotionDate(value) {
+    const match = String(value || "").match(
+      /(20\d{2})[年./-](\d{1,2})[月./-](\d{1,2})/
+    );
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) {
+      return null;
+    }
+    return (
+      year +
+      "-" +
+      ("0" + month).slice(-2) +
+      "-" +
+      ("0" + day).slice(-2)
+    );
+  }
+
+  function pointsPromotionFromEvidence(item, hotels, checkIn) {
+    if (!item || typeof item !== "object") return null;
+    const hotelName = cleanHotelText(item.hotelName || item.name);
+    const hotelKey = normalizeHotelKey(hotelName);
+    const hotel = hotels.find(
+      (candidate) => normalizeHotelKey(candidate.name) === hotelKey
+    );
+    if (!hotel) return null;
+    const bonusPoints = Number(
+      String(item.bonusPoints == null ? "" : item.bonusPoints).replace(/,/g, "")
+    );
+    if (
+      !Number.isFinite(bonusPoints) ||
+      bonusPoints <= 0 ||
+      bonusPoints > 1000000
+    ) {
+      return null;
+    }
+    const validFrom = normalizePromotionDate(
+      item.validFrom || item.startDate || item.start
+    );
+    const validTo = normalizePromotionDate(
+      item.validTo || item.endDate || item.end
+    );
+    const sourceText = cleanHotelText(
+      item.sourceText ||
+        item.evidence ||
+        item.sourceSummary ||
+        item.description ||
+        ""
+    ).slice(0, 500);
+    const sourceUrl = /^https?:\/\//i.test(String(item.sourceUrl || "").trim())
+      ? String(item.sourceUrl).trim()
+      : "";
+    const title = cleanHotelText(
+      item.title || item.promotionName || item.activityName || ""
+    );
+    const evidence = [title, sourceText].join(" ");
+    if (!sourceText) return null;
+    if (!/积分|points/i.test(evidence)) return null;
+    if (!/额外|加赠|赠送|再送|奖励|bonus|extra/i.test(evidence)) return null;
+    if (!validTo && !validFrom && !sourceUrl) return null;
+    if (validFrom && String(checkIn) < validFrom) return null;
+    if (validTo && String(checkIn) > validTo) return null;
+    return {
+      hotelId: hotel.id,
+      hotelName: hotel.name,
+      bonusPoints: Math.round(bonusPoints),
+      title: title || sourceText.slice(0, 90),
+      validFrom,
+      validTo,
+      source: "飞猪 AI 活动检索",
+      sourceText,
+      sourceUrl: sourceUrl || null,
+      fetchedAt: new Date().toISOString()
+    };
+  }
+
+  function persistPointsPromotionCache() {
+    const entries = Object.entries(pointsPromotionCache || {})
+      .sort(
+        (a, b) =>
+          Number(b[1] && b[1].queriedAt) - Number(a[1] && a[1].queriedAt)
+      )
+      .slice(0, 120);
+    pointsPromotionCache = Object.fromEntries(entries);
+    safeWrite("lvban.flyPointsPromotionCache.v1", pointsPromotionCache);
+  }
+
+  function readPointsPromotionCache(destinationId, checkIn) {
+    const key = pointsPromotionCacheKey(destinationId, checkIn);
+    const entry = pointsPromotionCache[key];
+    if (!entry || !Number.isFinite(Number(entry.queriedAt))) return null;
+    const fallbackTtl =
+      entry.status === "error"
+        ? POINTS_PROMOTION_ERROR_CACHE_TTL_MS
+        : POINTS_PROMOTION_CACHE_TTL_MS;
+    const expiresAt =
+      Number(entry.expiresAt) || Number(entry.queriedAt) + fallbackTtl;
+    return Date.now() < expiresAt ? entry : null;
+  }
+
+  function writePointsPromotionCache(entry) {
+    pointsPromotionCache[
+      pointsPromotionCacheKey(entry.destinationId, entry.checkIn)
+    ] = entry;
+    persistPointsPromotionCache();
+  }
+
+  function cachedPointsPromotionForHotel(hotel) {
+    if (!hotel) return null;
+    const entry = readPointsPromotionCache(hotel.destinationId, state.mapCheckIn);
+    const cached =
+      entry &&
+      entry.status === "success" &&
+      entry.promotions &&
+      entry.promotions[hotel.id];
+    return cached
+      ? normalizePointsPromotion(cached, cached.source || "飞猪活动缓存")
+      : null;
   }
 
   function bundledPointsPromotion(hotel) {
@@ -1565,6 +1931,7 @@
   function pointsPromotionForHotel(hotel) {
     return (
       normalizePointsPromotion(hotel && hotel.pointsPromotion, "实时酒店数据") ||
+      cachedPointsPromotionForHotel(hotel) ||
       bundledPointsPromotion(hotel)
     );
   }
@@ -1847,10 +2214,6 @@
 
   function persistComparisons() {
     safeWrite("lvban.compare.v1", Array.from(comparisons));
-  }
-
-  function persistChecklist() {
-    safeWrite("lvban.checklist.v1", checklist);
   }
 
   function navKey(route) {
@@ -2345,7 +2708,11 @@
                 "</p></div><div class=\"directory-price\"><strong>" +
                 esc(priceLabel(hotel)) +
                 "</strong><span>" +
-                (hasPrice(hotel) ? "含税参考/晚" : "官方查价") +
+                (hasPrice(hotel)
+                  ? "含税参考/晚"
+                  : hotelOpeningInfo(hotel).future
+                    ? hotelOpeningInfo(hotel).label
+                    : "官方查价") +
                 (Number(hotel.pointsPrice) > 0
                   ? '<br /><span class="directory-points-price">' +
                     esc(pointsLabel(hotel)) +
@@ -2518,7 +2885,11 @@
                 '<span class="result-hotel-price"><strong>' +
                 esc(priceLabel(hotel)) +
                 "</strong><span>" +
-                (hasPrice(hotel) ? priceSourceLabel(hotel) + " / 晚" : "官方渠道查价") +
+                (hasPrice(hotel)
+                  ? priceSourceLabel(hotel) + " / 晚"
+                  : hotelOpeningInfo(hotel).future
+                    ? hotelOpeningInfo(hotel).label
+                    : "官方渠道查价") +
                 "</span></span>" +
                 "</button>"
               : "") +
@@ -2909,6 +3280,9 @@
         : "") +
       " · 质量指数 " +
       esc(qualityLabel(hotel)) +
+      (hotelOpeningInfo(hotel).future
+        ? " · " + esc(hotelOpeningInfo(hotel).label)
+        : "") +
       "</p>" +
       modeTag(hotel.mode) +
       (pointsValueLabel(hotel)
@@ -2925,7 +3299,11 @@
       '<div class="hotel-price"><strong>' +
       esc(priceLabel(hotel)) +
       "</strong><span>" +
-      (hasPrice(hotel) ? priceSourceLabel(hotel) + " / 晚" : "官方渠道查价") +
+      (hasPrice(hotel)
+        ? priceSourceLabel(hotel) + " / 晚"
+        : hotelOpeningInfo(hotel).future
+          ? "开业后再查价"
+          : "官方渠道查价") +
       "</span>" +
       (Number(hotel.pointsPrice) > 0
         ? '<span class="hotel-points-price">' +
@@ -2936,7 +3314,7 @@
       '<button data-action="view-hotel" data-id="' +
       esc(hotel.id) +
       '">详情 →</button>' +
-      (!hasPrice(hotel)
+      (!hasPrice(hotel) && canQueryHotelPrice(hotel)
         ? '<button data-action="lookup-hotel-price" data-id="' +
           esc(hotel.id) +
           '">查价</button>'
@@ -3301,10 +3679,28 @@
       hotels.find((hotel) => hotel.id === state.mapSelectedHotelId) || hotels[0] || null;
     const visibleHotels = hotels.slice(0, state.mapVisible);
     const pricedCount = hotels.filter((hotel) => hasPrice(hotel)).length;
-    const pointsPromotionCount = hotels.filter((hotel) =>
+    const cityPricedCount = cityHotels.filter((hotel) => hasPrice(hotel)).length;
+    const cityPointsPromotionCount = cityHotels.filter((hotel) =>
       Boolean(pointsPromotionForHotel(hotel))
     ).length;
-    const missingPriceCount = cityHotels.filter((hotel) => !hasPrice(hotel)).length;
+    const cityOpeningCount = cityHotels.filter(
+      (hotel) => !hasPrice(hotel) && hotelOpeningInfo(hotel).future
+    ).length;
+    const missingPriceCount = cityHotels.filter(
+      (hotel) => !hasPrice(hotel) && canQueryHotelPrice(hotel)
+    ).length;
+    const pointsPromotionEntry = readPointsPromotionCache(
+      destination.id,
+      state.mapCheckIn
+    );
+    const pointsPromotionStatus =
+      state.pointsPromotionSync.destinationId === destination.id &&
+      state.pointsPromotionSync.checkIn === state.mapCheckIn &&
+      state.pointsPromotionSync.message
+        ? state.pointsPromotionSync.message
+        : pointsPromotionEntry
+          ? pointsPromotionCacheMessage(pointsPromotionEntry)
+          : "按城市查询 1 次；成功和空结果都会缓存 24 小时，不逐家消耗接口次数。";
     const selectedValueLabel = selected ? pointsValueLabel(selected) : "";
     const addressFallback =
       Boolean(state.mapAddressLocation) &&
@@ -3334,11 +3730,12 @@
       "</span><strong>" +
       cityHotels.length +
       " 家万豪系</strong><span>" +
-      pricedCount +
+      cityPricedCount +
       " 家已有报价" +
-      (missingPriceCount ? " · " + missingPriceCount + " 家待补" : "") +
-      (pointsPromotionCount
-        ? "</span><strong>" + pointsPromotionCount + " 家积分闪促</strong>"
+      (missingPriceCount ? " · " + missingPriceCount + " 家待核价" : "") +
+      (cityOpeningCount ? " · " + cityOpeningCount + " 家尚未开业" : "") +
+      (cityPointsPromotionCount
+        ? "</span><strong>" + cityPointsPromotionCount + " 家积分闪促</strong>"
         : "</span>") +
       "</div>" +
       "</section>" +
@@ -3404,7 +3801,9 @@
           " · " +
           (hasPrice(selected)
             ? money(selected.price) + " · " + priceSourceLabel(selected)
-            : "官方渠道查价") +
+            : hotelOpeningInfo(selected).future
+              ? hotelOpeningInfo(selected).label + " · 开业后再查价"
+              : "公开价格待查价") +
           (Number(selected.pointsPrice) > 0
             ? " · " + pointsLabel(selected) + " 积分房"
             : "") +
@@ -3499,6 +3898,25 @@
         ? "正在联网更新…"
         : "官网更新") +
       "</button></div>" +
+      '<button class="btn btn-secondary btn-block" style="margin-top:8px"' +
+      (state.pointsPromotionSync.status === "loading" &&
+      state.pointsPromotionSync.destinationId === destination.id &&
+      state.pointsPromotionSync.checkIn === state.mapCheckIn
+        ? " disabled"
+        : "") +
+      ' data-action="sync-points-promotions" data-id="' +
+      esc(destination.id) +
+      '">' +
+      icon("spark") +
+      (state.pointsPromotionSync.status === "loading" &&
+      state.pointsPromotionSync.destinationId === destination.id &&
+      state.pointsPromotionSync.checkIn === state.mapCheckIn
+        ? "正在检索积分闪促…"
+        : "同步积分闪促（按城市缓存）") +
+      "</button>" +
+      '<p class="micro muted" style="margin:7px 0 0">' +
+      esc(pointsPromotionStatus) +
+      "</p>" +
       (state.flyAi.message
         ? '<p class="micro muted" style="margin:9px 0 0">' +
           esc(state.flyAi.message) +
@@ -3513,7 +3931,7 @@
           icon("search") +
           (state.flyAiFill.active
             ? "正在逐家补价…"
-            : "逐家补齐 " + missingPriceCount + " 家缺失房价") +
+            : "逐家补齐 " + missingPriceCount + " 家可查价酒店") +
           "</button>" +
           '<p class="micro muted" id="flyai-fill-status" style="margin:7px 0 0">' +
           esc(
@@ -3527,6 +3945,11 @@
               : ""
           ) +
           "</p>"
+        : "") +
+      (cityOpeningCount
+        ? '<p class="micro muted" style="margin:7px 0 0">' +
+          cityOpeningCount +
+          " 家酒店尚未开业，已优先标注并跳过飞猪查价。</p>"
         : "") +
       (state.sync.message
         ? '<p class="micro muted" style="margin:9px 0 0">' +
@@ -4764,6 +5187,7 @@
     const publicScore = LOGIC.scoreEvidence(insightReviews);
     const valueInfo = pointsValuation(hotel);
     const pointsPromotion = pointsPromotionForHotel(hotel);
+    const opening = hotelOpeningInfo(hotel);
     const isFavorite = favorites.has(hotel.id);
     const isCompared = comparisons.has(hotel.id);
     const bookingUrl =
@@ -4806,7 +5230,9 @@
       "</span><span>质量 " +
       qualityLabel(hotel) +
       (publicScore ? " · 本地口碑 " + publicScore.score.toFixed(1) : "") +
-      "</span></div>" +
+      "</span>" +
+      (opening.future ? "<span>" + esc(opening.label) + "</span>" : "") +
+      "</div>" +
       "</section>" +
       '<div class="hotel-summary-grid">' +
       '<div class="hotel-summary-cell"><span>公开报价</span><strong>' +
@@ -4816,7 +5242,9 @@
         ? priceSourceLabel(hotel) +
           " · " +
           esc(formatDate(hotel.priceMeta && hotel.priceMeta.checkIn))
-        : "需联网查价") +
+        : opening.future
+          ? esc(opening.label) + "；开业后再查价"
+          : "需联网查价") +
       "</em></div>" +
       '<div class="hotel-summary-cell"><span>官网积分价</span><strong>' +
       esc(pointsLabel(hotel)) +
@@ -4824,7 +5252,9 @@
       (Number(hotel.pointsPrice) > 0
         ? "积分房 / 晚 · " +
           esc(formatDate(hotel.pointsMeta && hotel.pointsMeta.checkIn))
-        : "点击官网更新获取") +
+        : opening.future
+          ? "未开业，暂无房价"
+          : "点击官网更新获取") +
       "</em></div>" +
       '<div class="hotel-summary-cell"><span>住宿预算</span><strong>' +
       money(cost.lodging) +
@@ -4910,7 +5340,10 @@
           " · 入住日期 " +
           esc(formatDate(hotel.priceMeta && hotel.priceMeta.checkIn)) +
           " · 房型、税费与库存以下单页为准"
-        : "尚未取得公开报价 · 可从地图页刷新当前城市房价") +
+        : opening.future
+          ? esc(opening.label) +
+            " · 尚未开业，已跳过飞猪查价；开业后再更新房价"
+          : "尚未取得公开报价 · 可从地图页刷新当前城市房价") +
       "</span></div>" +
       modeTag(hotel.mode) +
       "</div>" +
@@ -4927,7 +5360,18 @@
             : "") +
           "。来源：" +
           esc(pointsPromotion.source) +
-          "。实际到账与会员资格以活动页和万豪官方确认为准。</p></div>"
+          "。实际到账与会员资格以活动页和万豪官方确认为准。</p>" +
+          (pointsPromotion.sourceText
+            ? '<p class="micro muted">核验依据：' +
+              esc(pointsPromotion.sourceText.slice(0, 180)) +
+              (pointsPromotion.sourceUrl
+                ? ' · <a href="' +
+                  esc(pointsPromotion.sourceUrl) +
+                  '" target="_self">查看活动来源</a>'
+                : "") +
+              "</p>"
+            : "") +
+          "</div>"
         : "") +
       (valueInfo
         ? '<div class="redemption-verdict ' +
@@ -4943,18 +5387,22 @@
             : "按你当前的每万分估值，现金价更便宜，不建议为了这张积分房放弃现金价。") +
           " 估算仅用于比较，不代表官方兑换价值。</p></div>"
         : '<div class="redemption-verdict is-pending"><p>同时取得现金价和官网积分价后，这里会自动判断积分与现金哪个更划算。</p></div>') +
-      '<div class="btn-row" style="margin-top:10px">' +
-      '<button class="btn btn-gold" data-action="refresh-flyai-hotel-city" data-id="' +
-      esc(hotel.destinationId) +
-      '">' +
-      icon("spark") +
-      "飞猪实时查价</button>" +
-      '<button class="btn btn-secondary" data-action="refresh-hotel-city" data-id="' +
-      esc(hotel.destinationId) +
-      '">' +
-      icon("source") +
-      "官网更新</button></div>" +
-      (!hasPrice(hotel)
+      (opening.future
+        ? '<div class="planner-status" style="margin-top:10px">该酒店预计 ' +
+          esc(opening.openingDate) +
+          " 开业。为避免浪费接口配额，开业前不发起飞猪查价，也不会计入逐家补价。</div>"
+        : '<div class="btn-row" style="margin-top:10px">' +
+          '<button class="btn btn-gold" data-action="refresh-flyai-hotel-city" data-id="' +
+          esc(hotel.destinationId) +
+          '">' +
+          icon("spark") +
+          "飞猪实时查价</button>" +
+          '<button class="btn btn-secondary" data-action="refresh-hotel-city" data-id="' +
+          esc(hotel.destinationId) +
+          '">' +
+          icon("source") +
+          "官网更新</button></div>") +
+      (!hasPrice(hotel) && !opening.future
         ? '<button class="btn btn-primary btn-block" style="margin-top:8px" data-action="lookup-hotel-price" data-id="' +
           esc(hotel.id) +
           '">' +
@@ -5598,7 +6046,11 @@
       {
         label: "公开报价",
         value: (hotel) =>
-          hasPrice(hotel) ? money(hotel.price) + " / 晚" : "官方渠道查价"
+          hasPrice(hotel)
+            ? money(hotel.price) + " / 晚"
+            : hotelOpeningInfo(hotel).future
+              ? hotelOpeningInfo(hotel).label
+              : "官方渠道查价"
       },
       { label: "质量指数", value: (hotel) => qualityLabel(hotel) + " / 10" },
       {
@@ -5657,19 +6109,11 @@
   }
 
   function renderTools() {
-    const checkedCount = CHECKLIST_ITEMS.filter((item) => checklist[item.id]).length;
     return (
       '<div class="member-tool-grid">' +
       '<button class="member-tool" type="button" data-action="focus-points"><span class="tool-icon">' +
       icon("calculator") +
       "</span><strong>积分价值速算</strong><p>先算每万分价值，再判断现金和积分哪个更灵活。</p></button>" +
-      '<button class="member-tool" type="button" data-action="focus-checklist"><span class="tool-icon">' +
-      icon("check") +
-      "</span><strong>入住前清单</strong><p>" +
-      checkedCount +
-      " / " +
-      CHECKLIST_ITEMS.length +
-      " 已完成。把不确定的事项在出发前问清。</p></button>" +
       "</div>" +
       '<section class="detail-section card" id="points-tool" style="margin-top:12px">' +
       "<h2>积分价值速算</h2>" +
@@ -5683,30 +6127,9 @@
       '</div><div class="calc-result" id="points-result"></div>' +
       '<p class="micro muted" style="margin:0">粗略比较，不含早餐、酒廊、取消政策和积分获取成本。积分或现金是否值得，应以官方可用性和个人估值决定。</p></div>' +
       "</section>" +
-      '<section class="detail-section card" id="checklist-tool" style="margin-top:12px">' +
-      '<div class="section-head"><div><h2>入住前确认</h2><p>按本次酒店和同行人选择</p></div><span class="micro muted">' +
-      checkedCount +
-      "/" +
-      CHECKLIST_ITEMS.length +
-      "</span></div>" +
-      '<div class="check-list">' +
-      CHECKLIST_ITEMS.map((item) => {
-        return (
-          '<label class="check-item"><input type="checkbox" data-check="' +
-          item.id +
-          '"' +
-          (checklist[item.id] ? " checked" : "") +
-          " /><span>" +
-          esc(item.title) +
-          "<small>" +
-          esc(item.detail) +
-          "</small></span></label>"
-        );
-      }).join("") +
-      "</div></section>" +
       '<div class="method-note">' +
       icon("info") +
-      "<span>提醒与清单首版保存在本机。尚未接入后台推送和官方会员账户；不会代替万豪官方权益说明。</span>" +
+      "<span>积分价值计算保存在本机；尚未接入官方会员账户，实际权益以万豪官方说明为准。</span>" +
       "</div>"
     );
   }
@@ -6043,7 +6466,9 @@
               " · " +
               formatDate(hotel.priceMeta && hotel.priceMeta.checkIn) +
               " 快照，非所选日期锁价）"
-            : "官方渠道查价")
+            : hotelOpeningInfo(hotel).future
+              ? hotelOpeningInfo(hotel).label + "，开业后再查价"
+              : "官方渠道查价")
         : "暂未匹配到酒店") +
       "</p></div>" +
       (hotel
@@ -6064,7 +6489,11 @@
                 ">" +
                 esc(option.name) +
                 " · " +
-                (Number(option.price) > 0 ? money(option.price) : "查价") +
+                (Number(option.price) > 0
+                  ? money(option.price)
+                  : hotelOpeningInfo(LOGIC.getHotel(option.hotelId)).future
+                    ? "未开业"
+                    : "查价") +
                 (Number(option.pointsPrice) > 0
                   ? " / " + Math.round(option.pointsPrice) + "分"
                   : "") +
@@ -7224,9 +7653,9 @@
         '<div class="about-item"><strong>网络与隐私</strong><p>' +
         (KEYLESS_BUILD
           ? "当前为无密钥公开构建：联网查价、地图、美团、飞猪和 DeepSeek 功能未配置。酒店目录、收藏、对比、榜单与本地详情仍可使用。"
-          : "网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、清单、酒店详情与餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。") +
+          : "网络权限用于美团酒旅景点/餐饮与必吃榜、高德坐标/天气/路线、飞猪酒店与交通、DeepSeek 汇总、官方酒店页面和手动房价更新。收藏、对比、酒店详情、积分闪促和餐饮结果缓存保存在本机；不会登录或读取万豪会员账户。") +
         "</p></div>" +
-        '<div class="about-item"><strong>版本</strong><p>旅伴 0.12.1 · 非万豪官方产品 · 目录时间 ' +
+        '<div class="about-item"><strong>版本</strong><p>旅伴 0.13 · 非万豪官方产品 · 目录时间 ' +
         esc(formatDate(DATA.updatedAt)) +
         "</p></div></div>"
     );
@@ -7387,15 +7816,6 @@
       }, 80);
       return;
     }
-    if (action === "focus-checklist") {
-      state.tripTab = "tools";
-      render();
-      window.setTimeout(() => {
-        const target = document.getElementById("checklist-tool");
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 80);
-      return;
-    }
     if (action === "focus-planner-form") {
       const target = document.getElementById("planner-form-card");
       if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -7475,6 +7895,13 @@
       state.mapAddressLocation = null;
       state.mapAddressLoading = false;
       state.mapVisible = 16;
+      state.pointsPromotionSync = {
+        status: "idle",
+        message: "",
+        destinationId: id,
+        checkIn: state.mapCheckIn,
+        updatedAt: state.pointsPromotionSync.updatedAt
+      };
       replaceHistorySnapshot();
       render();
       return;
@@ -7529,6 +7956,12 @@
     }
     if (action === "refresh-flyai-prices") {
       refreshFlyAiCityPrices(id).catch(() => {});
+      return;
+    }
+    if (action === "sync-points-promotions") {
+      syncCityPointsPromotions(id).catch((error) => {
+        showToast(error.message || "积分闪促检索失败");
+      });
       return;
     }
     if (action === "fill-missing-flyai-prices") {
@@ -7813,6 +8246,13 @@
       state.mapSelectedHotelId = null;
       state.sync = { status: "idle", message: "", updatedAt: state.sync.updatedAt };
       state.flyAi = { status: "idle", message: "", updatedAt: state.flyAi.updatedAt };
+      state.pointsPromotionSync = {
+        status: "idle",
+        message: "",
+        destinationId: state.mapCity,
+        checkIn: state.mapCheckIn,
+        updatedAt: state.pointsPromotionSync.updatedAt
+      };
       replaceHistorySnapshot();
       render();
       return;
@@ -7824,7 +8264,15 @@
         message: "",
         updatedAt: state.flyAi.updatedAt
       };
+      state.pointsPromotionSync = {
+        status: "idle",
+        message: "",
+        destinationId: state.mapCity,
+        checkIn: state.mapCheckIn,
+        updatedAt: state.pointsPromotionSync.updatedAt
+      };
       safeWrite("lvban.mapCheckIn.v1", state.mapCheckIn);
+      render();
       replaceHistorySnapshot();
       return;
     }
@@ -7841,14 +8289,6 @@
       state.mapSelectedHotelId = null;
       state.mapVisible = 16;
       render();
-      return;
-    }
-    if (event.target.matches("[data-check]")) {
-      checklist[event.target.dataset.check] = event.target.checked;
-      persistChecklist();
-      const scrollY = window.scrollY;
-      render();
-      window.scrollTo(0, scrollY);
       return;
     }
   }
