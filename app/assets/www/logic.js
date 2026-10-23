@@ -390,6 +390,25 @@
   ];
   const REDUCED_EARN_BRANDS = new Set(["EL", "ER", "BA", "RI", "TS"]);
   const USD_CNY = 7.1;
+  // Fixed estimates; official quotes for HK/Macau/Taiwan are in local currency.
+  const CNY_PER_UNIT = { CNY: 1, USD: USD_CNY, HKD: 0.91, MOP: 0.88, TWD: 0.22 };
+  const REGION_CURRENCY = [
+    ["香港", "HKD"],
+    ["澳门", "MOP"],
+    ["台湾", "TWD"]
+  ];
+
+  function localCurrency(hotel) {
+    const place = String((hotel && (hotel.provinceFull || hotel.province || hotel.cityFull || hotel.city)) || "");
+    const match = REGION_CURRENCY.find(([name]) => place.includes(name));
+    return match ? match[1] : "CNY";
+  }
+
+  // Returns the CNY rate for an amount, or null for an unknown currency.
+  function cnyRate(currency, hotel) {
+    const code = String(currency || localCurrency(hotel)).toUpperCase();
+    return Object.prototype.hasOwnProperty.call(CNY_PER_UNIT, code) ? CNY_PER_UNIT[code] : null;
+  }
   const ASSUMED_TAX_RATE = 0.166;
 
   const HAPPINESS_WEIGHTS = { rating: 45, view: 20, breakfast: 20, gym: 15 };
@@ -435,6 +454,39 @@
     return Number.isFinite(points) && points > 0 ? points : 0;
   }
 
+  // Standard redemption (points per night) captured from the official search
+  // on the same night as its cash total, so the two are directly comparable.
+  function awardRedemption(hotel, prefs) {
+    const store = global.APP_AWARD_POINTS;
+    const record = store && store.hotels && store.hotels[hotel.id];
+    const points = Number(record && record.points);
+    if (!Number.isFinite(points) || points <= 0) return null;
+    const settings = normalizeValuePrefs(prefs);
+    const sameNightCash = Number(record.cashTotal);
+    const currency = String(record.currency || localCurrency(hotel)).toUpperCase();
+    const rate = cnyRate(currency, hotel);
+    const cash = Number.isFinite(sameNightCash) && sameNightCash > 0 && rate ? sameNightCash * rate : null;
+    // A same-night cash quote far above the catalog price usually means only a
+    // premium room was left; that would overstate the redemption value.
+    const catalogRate = cnyRate(hotel.priceMeta && hotel.priceMeta.currency, hotel);
+    const catalogCash = Number(hotel.totalPrice || hotel.price) * (catalogRate || 0);
+    const suspect = Boolean(cash && catalogCash > 0 && cash > catalogCash * 3);
+    const valuePer10k = cash && !suspect ? (cash / points) * 10000 : null;
+    return {
+      points,
+      cash,
+      suspect,
+      cashLocal: Number.isFinite(sameNightCash) && sameNightCash > 0 ? sameNightCash : null,
+      currency,
+      available: record.available !== false,
+      checkIn: store.checkIn || "",
+      valuePer10k,
+      // Ratio against the user's own valuation; >1 means points beat cash.
+      versusPrefs: valuePer10k && settings.pointValue > 0 ? valuePer10k / settings.pointValue : null,
+      pointsCostAtPrefs: (points / 10000) * settings.pointValue
+    };
+  }
+
   function normalizeValuePrefs(prefs) {
     const merged = Object.assign({}, VALUE_DEFAULTS, prefs || {});
     const pointValue = Number(merged.pointValue);
@@ -450,9 +502,12 @@
   // lets the app supply live flash-promo points it already knows about.
   function netCostBreakdown(hotel, prefs, resolveBonus) {
     const settings = normalizeValuePrefs(prefs);
-    const price = Number(hotel.price);
+    const currency = String((hotel.priceMeta && hotel.priceMeta.currency) || "CNY").toUpperCase();
+    const rate = cnyRate(currency, hotel);
+    if (!rate) return null;
+    const price = Number(hotel.price) * rate;
     if (!Number.isFinite(price) || price <= 0) return null;
-    const total = Number(hotel.totalPrice);
+    const total = Number(hotel.totalPrice) * rate;
     const taxIncluded = Number.isFinite(total) && total > 0;
     // Marriott quotes carry a pre-tax price plus a tax-inclusive total; other
     // sources (Fliggy) quote a single tax-inclusive price.
@@ -480,6 +535,8 @@
       bonusPoints,
       bonusValue,
       netCost,
+      currency,
+      fxRate: rate,
       basePerUsd,
       tierLabel: tier.label,
       discountPct: settings.discountPct,
@@ -650,6 +707,7 @@
       season,
       seasonBonus,
       happinessScore,
+      award: awardRedemption(hotel, options.prefs),
       // Happiness points bought per 1,000 CNY of real nightly cost.
       valuePerThousand: (happinessScore / cost.netCost) * 1000
     };
@@ -691,6 +749,12 @@
       happiness: (a, b) =>
         b.happinessScore - a.happinessScore || a.cost.netCost - b.cost.netCost,
       cost: (a, b) => a.cost.netCost - b.cost.netCost || b.happinessScore - a.happinessScore
+      ,
+      // Best redemption value first; hotels without an award price sink to the end.
+      points: (a, b) =>
+        ((b.award && b.award.available && b.award.valuePer10k) || -1) -
+          ((a.award && a.award.available && a.award.valuePer10k) || -1) ||
+        b.valuePerThousand - a.valuePerThousand
     };
     pool.sort(sorters[settings.sort] || sorters.value);
     const bestValue = pool.reduce((max, item) => Math.max(max, item.valuePerThousand), 0) || 1;
@@ -855,6 +919,7 @@
     SEASONS,
     HAPPINESS_WEIGHTS,
     netCostBreakdown,
+    awardRedemption,
     happinessBreakdown,
     seasonForMonth,
     seasonFit,

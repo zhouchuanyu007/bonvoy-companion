@@ -5243,7 +5243,12 @@
     const minus = (value) => "−" + esc(money(value));
     return (
       '<div class="value-ledger"><div class="ledger-col"><h4>一晚真实成本</h4>' +
-      line("房价", esc(money(cost.cost)), cost.taxIncluded ? "含税" : "公开价，按含税处理") +
+      line(
+        "房价",
+        esc(money(cost.cost)),
+        (cost.taxIncluded ? "含税" : "公开价，按含税处理") +
+          (cost.currency && cost.currency !== "CNY" ? " · 原价 " + cost.currency + "，按 " + cost.fxRate + " 折人民币" : "")
+      ) +
       (cost.discount > 0
         ? line("折扣", minus(cost.discount), cost.discountPct + "%", "is-credit")
         : "") +
@@ -5257,6 +5262,7 @@
         ? line("闪促赠分", minus(cost.bonusValue), cost.bonusPoints.toLocaleString("zh-CN") + " 分", "is-credit")
         : line("闪促赠分", "¥0", "未取得活动数据")) +
       line("净成本", esc(money(cost.netCost)), "", "is-total") +
+      awardLedger(item.award, line) +
       '</div><div class="ledger-col"><h4>幸福度 ' +
       item.happinessScore.toFixed(1) +
       "</h4>" +
@@ -5269,6 +5275,95 @@
         ? line("季节加成", "+" + item.seasonBonus.toFixed(1), item.season.reason, "is-credit")
         : "") +
       "</div></div>"
+    );
+  }
+
+  function rankingExample(item) {
+    if (!item) return "";
+    const cost = item.cost;
+    const parts = [money(cost.cost)];
+    if (cost.discount > 0) parts.push("− " + money(cost.discount) + " 折扣");
+    parts.push(
+      "− " + money(cost.earnedValue) + "（" + cost.earnedPoints.toLocaleString("zh-CN") + " 分回血）"
+    );
+    if (cost.bonusValue > 0) parts.push("− " + money(cost.bonusValue) + " 闪促");
+    return (
+      '<p class="rules-example">以第 1 名' +
+      esc(item.hotel.name) +
+      "为例：净成本 " +
+      esc(parts.join(" ")) +
+      " = " +
+      esc(money(cost.netCost)) +
+      "；幸福度 " +
+      item.happinessScore.toFixed(1) +
+      " ÷ " +
+      esc(money(cost.netCost)) +
+      " × 1,000 = 每千元 " +
+      item.valuePerThousand.toFixed(0) +
+      " 幸福分。</p>"
+    );
+  }
+
+  function awardFigure(award) {
+    if (!award) {
+      return '<div class="value-award is-missing"><span>积分房</span><strong>—</strong><em>未取得兑换价</em></div>';
+    }
+    const good = award.versusPrefs && award.versusPrefs >= 1;
+    return (
+      '<div class="value-award' +
+      (good ? " is-good" : "") +
+      (award.available ? "" : " is-soldout") +
+      '"><span>积分房 / 晚</span><strong>' +
+      esc(Math.round(award.points / 1000)) +
+      "k</strong><em>" +
+      (award.valuePer10k
+        ? "每万分 " + esc(money(award.valuePer10k))
+        : award.suspect ? "价值待核实" : "无同日现金价") +
+      "</em></div>"
+    );
+  }
+
+  function awardLedger(award, line) {
+    if (!award) {
+      return (
+        '<h4 class="ledger-sub">积分兑换</h4>' +
+        line("标准积分房", "—", "官方搜索未返回该酒店的兑换价", "is-muted")
+      );
+    }
+    const verdict = !award.valuePer10k
+      ? ""
+      : award.versusPrefs >= 1
+        ? "高于你的估值 ¥" + valuePrefs.pointValue + "，用积分更划算"
+        : "低于你的估值 ¥" + valuePrefs.pointValue + "，付现金更划算";
+    return (
+      '<h4 class="ledger-sub">积分兑换</h4>' +
+      line(
+        "一晚所需积分",
+        esc(award.points.toLocaleString("zh-CN")) + " 分",
+        (award.checkIn ? formatDate(award.checkIn) + " 入住" : "") +
+          (award.available ? "" : " · 当日无积分房"),
+        award.available ? "" : "is-muted"
+      ) +
+      (award.cash
+        ? line(
+            "同日现金价",
+            esc(money(award.cash)),
+            "含税，与积分价同一晚" +
+              (award.currency !== "CNY"
+                ? " · 原价 " + award.currency + " " + Math.round(award.cashLocal).toLocaleString("zh-CN") + "，估算汇率"
+                : "")
+          )
+        : "") +
+      (award.valuePer10k
+        ? line(
+            "兑换价值",
+            "每万分 " + esc(money(award.valuePer10k)),
+            "现金价 ÷ 积分 × 10,000 · " + verdict,
+            award.versusPrefs >= 1 ? "is-credit is-total" : "is-total"
+          )
+        : award.suspect
+          ? line("兑换价值", "待核实", "同日现金价远高于常规房价，可能只剩高等级房型", "is-muted")
+          : "")
     );
   }
 
@@ -5297,9 +5392,11 @@
       esc(money(item.cost.cost)) +
       '</em></div><div><span>幸福度</span><strong>' +
       item.happinessScore.toFixed(1) +
-      '</strong><em>每千元 ' +
+      '</strong><em title="每花 ¥1,000 净成本买到的幸福分">每千元幸福分 ' +
       item.valuePerThousand.toFixed(0) +
-      '</em></div></div><button type="button" class="value-toggle" data-action="toggle-rank-ledger" data-id="' +
+      "</em></div>" +
+      awardFigure(item.award) +
+      '</div><button type="button" class="value-toggle" data-action="toggle-rank-ledger" data-id="' +
       esc(hotel.id) +
       '" aria-expanded="' +
       (expanded ? "true" : "false") +
@@ -5324,7 +5421,8 @@
     const sortItems = [
       { id: "value", label: "性价比" },
       { id: "happiness", label: "幸福度" },
-      { id: "cost", label: "净成本" }
+      { id: "cost", label: "净成本" },
+      { id: "points", label: "积分价值" }
     ];
     const tierItems = LOGIC.ELITE_TIERS.map((tier) => ({ id: tier.id, label: tier.label }));
     const currentSeason = LOGIC.seasonForMonth(new Date().getMonth() + 1);
@@ -5429,11 +5527,11 @@
             "重置筛选",
             "reset-rank-filters"
           )) +
-      '<details class="rules-card"><summary>榜单怎么算</summary><p>' +
-      "净成本 = 房价（含税）− 额外折扣 − 入住积分回血 − 闪促赠分。积分按每万分 ¥" +
+      '<details class="rules-card"><summary>榜单怎么算</summary>' +
+      rankingExample(result.items[0]) +
+      "<p><b>净成本</b> = 含税房价 − 额外折扣 − 入住积分回血 − 闪促赠分。入住积分按万豪会员条款：多数品牌每美元 10 分，源宿等长住品牌 5 分，再叠加会员等级奖励（银卡 +10%、金卡 +25%、白金 +50%、钛金 +75%）；房价按税前、汇率 7.1 折成美元。积分换成钱按你设置的每万分 ¥" +
       esc(valuePrefs.pointValue) +
-      " 折算；回血积分按万豪会员条款计算（多数品牌每美元 10 分，源宿等长住品牌 5 分，叠加会员等级奖励），汇率按 " +
-      "7.1 估算。</p><p>幸福度满分 100：酒店评分 " +
+      "。</p><p><b>积分房</b>是官方标准积分兑换（一晚所需积分），与同一晚的含税现金价一起抓取。<b>每万分价值</b> = 现金价 ÷ 积分 × 10,000，高于你的估值时标绿，表示这家用积分比付现金划算。港澳台报价按估算汇率（港币 0.91、澳门元 0.88、新台币 0.22）折成人民币；同日现金价超过常规房价 3 倍的视为只剩高价房型，不计价值。</p><p>幸福度满分 100：酒店评分 " +
       LOGIC.HAPPINESS_WEIGHTS.rating +
       "、风景 " +
       LOGIC.HAPPINESS_WEIGHTS.view +
@@ -5442,7 +5540,7 @@
       "、健身房 " +
       LOGIC.HAPPINESS_WEIGHTS.gym +
       "。风景取房型名中最好的景观，早餐看是否自助与菜系数量，资料缺失时按中性分处理并灰色标出。选择季节后，符合当季玩法的酒店另加最多 12 分。</p><p>" +
-      "性价比 = 幸福度 ÷ 净成本 × 1000，即每花 ¥1,000 买到的幸福分。现在是" +
+      "<b>每千元幸福分</b> = 幸福度 ÷ 净成本 × 1,000，即每花 ¥1,000 真实成本能买到多少幸福分，按它从高到低排就是性价比榜。现在是" +
       esc(currentSeason.label) +
       "季；价格为 " +
       esc(formatDate(DATA.catalogMeta.priceSnapshot || DATA.updatedAt)) +

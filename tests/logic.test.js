@@ -204,6 +204,31 @@ assert.equal(tinyScope.items.length, Math.min(10, tinyScope.candidates), "Never 
 const champions = LOGIC.bandChampions({});
 assert.equal(champions.length, DATA.priceBands.length - 1);
 
+// Award redemption (points per night) and value per 10,000 points
+const savedAward = globalThis.APP_AWARD_POINTS;
+globalThis.APP_AWARD_POINTS = {
+  checkIn: "2026-11-06",
+  hotels: { [pricedHotel.id]: { points: 25000, cashTotal: 1250, available: true } }
+};
+const award = LOGIC.awardRedemption(pricedHotel, { pointValue: 400 });
+assert.equal(award.points, 25000);
+assert.equal(Math.round(award.valuePer10k), 500, "1250 / 25000 * 10000 = 500");
+assert.ok(award.versusPrefs > 1, "Above user valuation means points win");
+assert.equal(LOGIC.awardRedemption({ id: "none" }, {}), null);
+globalThis.APP_AWARD_POINTS.hotels.tw = { points: 20000, cashTotal: 10000, available: true };
+const twAward = LOGIC.awardRedemption({ id: "tw", provinceFull: "台湾省" }, { pointValue: 400 });
+assert.equal(twAward.currency, "TWD");
+assert.equal(Math.round(twAward.valuePer10k), 1100, "TWD 10000 * 0.22 / 20000 * 10000");
+const twCost = LOGIC.netCostBreakdown(
+  { price: 10000, totalPrice: 11000, priceMeta: { currency: "TWD" }, brandId: "x" },
+  { pointValue: 400 }
+);
+assert.equal(Math.round(twCost.cost), 2420, "Non-CNY prices are converted before ranking");
+delete globalThis.APP_AWARD_POINTS.hotels.tw;
+const pointsSorted = LOGIC.getHappinessRanking({ sort: "points", limit: 3 });
+assert.equal(pointsSorted.items[0].hotel.id, pricedHotel.id, "Points sort puts redeemable hotels first");
+globalThis.APP_AWARD_POINTS = savedAward;
+
 console.log(
   JSON.stringify(
     {

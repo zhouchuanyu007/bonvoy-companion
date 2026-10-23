@@ -5430,7 +5430,7 @@ img[hidden] { display: none; }
 .value-segmented, .value-tiers, .value-sort { margin-top: 0; }
 .value-tiers { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .value-segmented { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.value-sort { grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 228px; }
+.value-sort { grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 300px; }
 .value-segmented button, .value-tiers button, .value-sort button { min-height: 36px; padding: 0 4px; font-size: 13px; white-space: nowrap; }
 .value-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; padding: 16px 0 4px; }
 .value-select { display: grid; gap: 6px; min-width: 0; }
@@ -5484,6 +5484,14 @@ img[hidden] { display: none; }
 .ledger-line.is-total { border-top: 1px solid var(--ink); font-size: 14px; font-weight: 700; }
 .ledger-line.is-muted span, .ledger-line.is-muted strong { color: var(--muted); }
 .value-more { margin-top: 16px; }
+.value-figures { grid-template-columns: repeat(3, auto); }
+.value-award strong { color: var(--ink); }
+.value-award.is-good strong, .value-award.is-good em { color: var(--sage); }
+.value-award.is-soldout strong { color: var(--muted); text-decoration: line-through; }
+.value-award.is-missing strong { color: var(--muted); }
+.ledger-sub { margin: 16px 0 6px; font-size: 13px; color: var(--ink); }
+.rules-example { padding: 10px 12px; border-left: 3px solid #b99456; background: var(--paper-deep); color: var(--ink); }
+.rules-card b { color: var(--ink); }
 .value-screen .rules-card { margin-top: 24px; }
 @media (max-width: 600px) {
   .value-header h1 { font-size: 24px; }
@@ -5491,7 +5499,7 @@ img[hidden] { display: none; }
   .champion-grid::-webkit-scrollbar { display: none; }
   .champion { flex: 0 0 min(62%, 220px); scroll-snap-align: start; }
   .value-results-head { flex-direction: column; align-items: stretch; }
-  .value-sort { min-width: 0; }
+  .value-sort { min-width: 0; width: 100%; }
   .value-row { grid-template-columns: 28px minmax(0, 1fr) 40px; gap: 4px 10px; }
   .value-rank { width: 28px; height: 28px; font-size: 13px; }
   .value-figures { grid-column: 2 / 3; grid-row: 2; justify-content: start; text-align: left; margin-top: 8px; }
