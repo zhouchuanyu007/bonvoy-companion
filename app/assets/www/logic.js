@@ -454,36 +454,59 @@
     return Number.isFinite(points) && points > 0 ? points : 0;
   }
 
+  function awardSample(raw, hotel, fallbackDate) {
+    const points = Number(raw && raw.points);
+    if (!Number.isFinite(points) || points <= 0) return null;
+    const local = Number(raw.cashTotal);
+    const currency = String(raw.currency || localCurrency(hotel)).toUpperCase();
+    const rate = cnyRate(currency, hotel);
+    const cash = Number.isFinite(local) && local > 0 && rate ? local * rate : null;
+    return {
+      date: raw.date || fallbackDate || "",
+      points,
+      cash,
+      cashLocal: Number.isFinite(local) && local > 0 ? local : null,
+      currency,
+      available: raw.available !== false,
+      valuePer10k: cash ? (cash / points) * 10000 : null
+    };
+  }
+
   // Standard redemption (points per night) captured from the official search
-  // on the same night as its cash total, so the two are directly comparable.
+  // together with that same night's cash total. Several nights are sampled and
+  // the median is used, because one weekend or event night can skew value 2x+.
   function awardRedemption(hotel, prefs) {
     const store = global.APP_AWARD_POINTS;
     const record = store && store.hotels && store.hotels[hotel.id];
-    const points = Number(record && record.points);
-    if (!Number.isFinite(points) || points <= 0) return null;
+    if (!record) return null;
+    const rawSamples = Array.isArray(record.samples) ? record.samples : [record];
+    const samples = rawSamples.map((raw) => awardSample(raw, hotel, store.checkIn)).filter(Boolean);
+    if (!samples.length) return null;
     const settings = normalizeValuePrefs(prefs);
-    const sameNightCash = Number(record.cashTotal);
-    const currency = String(record.currency || localCurrency(hotel)).toUpperCase();
-    const rate = cnyRate(currency, hotel);
-    const cash = Number.isFinite(sameNightCash) && sameNightCash > 0 && rate ? sameNightCash * rate : null;
-    // A same-night cash quote far above the catalog price usually means only a
-    // premium room was left; that would overstate the redemption value.
-    const catalogRate = cnyRate(hotel.priceMeta && hotel.priceMeta.currency, hotel);
-    const catalogCash = Number(hotel.totalPrice || hotel.price) * (catalogRate || 0);
-    const suspect = Boolean(cash && catalogCash > 0 && cash > catalogCash * 3);
-    const valuePer10k = cash && !suspect ? (cash / points) * 10000 : null;
+    const priced = samples
+      .filter((sample) => sample.available && sample.valuePer10k)
+      .sort((a, b) => a.valuePer10k - b.valuePer10k);
+    // Lower median keeps the figure tied to a real night instead of an average.
+    const median = priced.length ? priced[Math.floor((priced.length - 1) / 2)] : null;
+    const lead = median || samples.find((sample) => sample.available) || samples[0];
+    const valuePer10k = median ? median.valuePer10k : null;
     return {
-      points,
-      cash,
-      suspect,
-      cashLocal: Number.isFinite(sameNightCash) && sameNightCash > 0 ? sameNightCash : null,
-      currency,
-      available: record.available !== false,
-      checkIn: store.checkIn || "",
+      points: lead.points,
+      cash: lead.cash,
+      cashLocal: lead.cashLocal,
+      currency: lead.currency,
+      available: samples.some((sample) => sample.available),
+      checkIn: lead.date,
+      samples,
+      median,
+      sampleCount: samples.length,
+      pricedCount: priced.length,
+      minValue: priced.length ? priced[0].valuePer10k : null,
+      best: priced.length ? priced[priced.length - 1] : null,
       valuePer10k,
       // Ratio against the user's own valuation; >1 means points beat cash.
       versusPrefs: valuePer10k && settings.pointValue > 0 ? valuePer10k / settings.pointValue : null,
-      pointsCostAtPrefs: (points / 10000) * settings.pointValue
+      pointsCostAtPrefs: (lead.points / 10000) * settings.pointValue
     };
   }
 

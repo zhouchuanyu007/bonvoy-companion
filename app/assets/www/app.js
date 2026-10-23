@@ -5318,7 +5318,7 @@
       "k</strong><em>" +
       (award.valuePer10k
         ? "每万分 " + esc(money(award.valuePer10k))
-        : award.suspect ? "价值待核实" : "无同日现金价") +
+        : "无同日现金价") +
       "</em></div>"
     );
   }
@@ -5335,42 +5335,55 @@
       : award.versusPrefs >= 1
         ? "高于你的估值 ¥" + valuePrefs.pointValue + "，用积分更划算"
         : "低于你的估值 ¥" + valuePrefs.pointValue + "，付现金更划算";
-    return (
-      '<h4 class="ledger-sub">积分兑换</h4>' +
+    const shortDate = (value) => String(value || "").slice(5).replace("-", "/");
+    const weekday = (value) => {
+      const date = new Date(String(value) + "T00:00:00");
+      return Number.isNaN(date.getTime()) ? "" : "周" + "日一二三四五六"[date.getDay()];
+    };
+    const fx = (sample) =>
+      sample.currency !== "CNY" && sample.cashLocal
+        ? "原价 " + sample.currency + " " + Math.round(sample.cashLocal).toLocaleString("zh-CN") + "，估算汇率 · "
+        : "";
+    // One line per sampled night: points, cash and the value of that night.
+    const nights = (award.samples || []).map((sample) =>
       line(
-        "一晚所需积分",
-        esc(award.points.toLocaleString("zh-CN")) + " 分",
-        (award.checkIn ? formatDate(award.checkIn) + " 入住" : "") +
-          (award.available ? "" : " · 当日无积分房"),
-        award.available ? "" : "is-muted"
-      ) +
-      (award.cash
-        ? line(
-            "同日现金价",
-            esc(money(award.cash)),
-            "含税，与积分价同一晚" +
-              (listCost && Math.abs(award.cash - listCost) / listCost > 0.05
-                ? " · 与上方房价 " + money(listCost) + " 不是同一天的报价"
-                : "") +
-              (award.currency !== "CNY"
-                ? " · 原价 " + award.currency + " " + Math.round(award.cashLocal).toLocaleString("zh-CN") + "，估算汇率"
-                : "")
-          )
-        : "") +
+        shortDate(sample.date) + " " + weekday(sample.date),
+        sample.valuePer10k && sample.available ? "每万分 " + esc(money(sample.valuePer10k)) : "—",
+        sample.points.toLocaleString("zh-CN") +
+          " 分 · " +
+          (sample.cash ? fx(sample) + "现金 " + money(sample.cash) : "无现金价") +
+          (sample.available ? "" : " · 无积分房"),
+        sample === award.median ? "is-pick" : sample.available ? "" : "is-muted"
+      )
+    );
+    const spread =
+      award.pricedCount > 1 && award.minValue && award.best
+        ? "；" + award.pricedCount + " 晚区间 " + money(award.minValue) + "–" + money(award.best.valuePer10k)
+        : "";
+    return (
+      '<h4 class="ledger-sub">积分兑换 · 抽样 ' +
+      (award.sampleCount || 1) +
+      " 晚</h4>" +
+      nights.join("") +
       (award.valuePer10k
         ? line(
-            "兑换价值",
+            "兑换价值（中位数）",
             "每万分 " + esc(money(award.valuePer10k)),
             money(award.cash) +
               " ÷ " +
               award.points.toLocaleString("zh-CN") +
-              " 分 × 10,000 · " +
+              " 分 × 10,000" +
+              spread +
+              " · " +
               verdict,
             award.versusPrefs >= 1 ? "is-credit is-total" : "is-total"
           )
-        : award.suspect
-          ? line("兑换价值", "待核实", "同日现金价远高于常规房价，可能只剩高等级房型", "is-muted")
-          : "")
+        : line("兑换价值", "—", "抽样日期均无可兑换积分房或现金价", "is-muted")) +
+      (listCost && award.cash && Math.abs(award.cash - listCost) / listCost > 0.05
+        ? '<p class="ledger-note">上方房价 ' +
+          esc(money(listCost)) +
+          " 来自目录报价日期，和积分抽样日不同，所以两个现金价不一致。</p>"
+        : "")
     );
   }
 
@@ -5538,7 +5551,7 @@
       rankingExample(result.items[0]) +
       "<p><b>净成本</b> = 含税房价 − 额外折扣 − 入住积分回血 − 闪促赠分。入住积分按万豪会员条款：多数品牌每美元 10 分，源宿等长住品牌 5 分，再叠加会员等级奖励（银卡 +10%、金卡 +25%、白金 +50%、钛金 +75%）；房价按税前、汇率 7.1 折成美元。积分换成钱按你设置的每万分 ¥" +
       esc(valuePrefs.pointValue) +
-      "。</p><p><b>积分房</b>是官方标准积分兑换（一晚所需积分），与同一晚的含税现金价一起抓取。<b>每万分价值</b> = 现金价 ÷ 积分 × 10,000，高于你的估值时标绿，表示这家用积分比付现金划算。港澳台报价按估算汇率（港币 0.91、澳门元 0.88、新台币 0.22）折成人民币；同日现金价超过常规房价 3 倍的视为只剩高价房型，不计价值。</p><p>幸福度满分 100：酒店评分 " +
+      "。</p><p><b>积分房</b>是官方标准积分兑换（一晚所需积分），每个抽样晚上都同时抓积分价和当晚含税最低现金价。<b>每万分价值</b> = 当晚现金价 ÷ 当晚积分 × 10,000；抽样多晚（默认 2 个周二 + 2 个周六），取中位数作为这家的积分价值，避免周末或展会单晚把价值抬高；明细里列出每晚的数字。高于你的估值时标绿，表示用积分比付现金划算。港澳台报价按估算汇率（港币 0.91、澳门元 0.88、新台币 0.22）折成人民币。</p><p>幸福度满分 100：酒店评分 " +
       LOGIC.HAPPINESS_WEIGHTS.rating +
       "、风景 " +
       LOGIC.HAPPINESS_WEIGHTS.view +

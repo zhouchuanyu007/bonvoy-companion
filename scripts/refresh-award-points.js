@@ -4,7 +4,9 @@
 // the official marriott.com.cn search, alongside the same-night cash total, and
 // writes app/assets/www/hotel-award-points.js.
 //
-// Usage: node scripts/refresh-award-points.js [checkIn YYYY-MM-DD] [--limit N]
+// Usage: node scripts/refresh-award-points.js [YYYY-MM-DD ...] [--limit N]
+//   Several dates are sampled (default: 2 weekdays + 2 Saturdays) because a
+//   single night can be badly skewed by weekend or event pricing.
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -23,7 +25,7 @@ const catalog = globalThis.APP_CATALOG;
 const args = process.argv.slice(2);
 const limitIndex = args.indexOf("--limit");
 const destinationLimit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : Infinity;
-const dateArg = args.find((arg) => /^\d{4}-\d{2}-\d{2}$/.test(arg));
+const dateArgs = args.filter((arg) => /^\d{4}-\d{2}-\d{2}$/.test(arg));
 // --dump CITY HOTEL_ID prints that hotel's raw rates and writes nothing.
 const dumpIndex = args.indexOf("--dump");
 const dump = dumpIndex >= 0 ? { city: args[dumpIndex + 1], id: args[dumpIndex + 2] } : null;
@@ -164,9 +166,24 @@ function readRates(rates) {
   return { points, cashTotal, currency, available };
 }
 
+function defaultDates() {
+  // Next Tuesday and Saturday at roughly +2 and +4 weeks.
+  const out = [];
+  [14, 28].forEach((offset) => {
+    const base = new Date(Date.now() + offset * 86400000);
+    base.setHours(0, 0, 0, 0);
+    [2, 6].forEach((weekday) => {
+      const date = new Date(base);
+      date.setDate(base.getDate() + ((weekday - base.getDay() + 7) % 7));
+      out.push(date);
+    });
+  });
+  return out.sort((a, b) => a - b);
+}
+
 (async () => {
-  const checkIn = dateArg ? new Date(dateArg + "T00:00:00") : new Date(Date.now() + 14 * 86400000);
-  const checkOut = new Date(checkIn.getTime() + 86400000);
+  const dates = dateArgs.length ? dateArgs.map((value) => new Date(value + "T00:00:00")) : defaultDates();
+  const nextDay = (date) => new Date(date.getTime() + 86400000);
   const hotelIds = new Set(catalog.hotels.map((hotel) => hotel.id));
   const cities = Array.from(new Set(catalog.hotels.map((hotel) => hotel.cityFull || hotel.city).filter(Boolean)));
   const records = {};
@@ -184,8 +201,12 @@ function readRates(rates) {
     await cdp.send("Network.enable");
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
-    const template = await captureTemplate(cdp, checkIn, checkOut);
+    const template = await captureTemplate(cdp, dates[0], nextDay(dates[0]));
     const queue = dump ? [dump.city] : cities.slice(0, destinationLimit);
+    for (const checkIn of dates) {
+    const checkOut = nextDay(checkIn);
+    const day = isoDate(checkIn);
+    const seen = new Set();
     for (const [index, city] of queue.entries()) {
       try {
         let offset = 0;
@@ -196,28 +217,29 @@ function readRates(rates) {
           search.edges.forEach((edge) => {
             const id = edge && edge.node && edge.node.property && edge.node.property.id;
             if (dump && id === dump.id) console.log(JSON.stringify(edge.node.rates, null, 1));
-            if (!id || !hotelIds.has(id) || records[id]) return;
+            if (!id || !hotelIds.has(id) || seen.has(id)) return;
             const rate = readRates(edge.node.rates);
             if (!rate.points) return;
-            records[id] = rate;
+            seen.add(id);
+            (records[id] = records[id] || { samples: [] }).samples.push(Object.assign({ date: day }, rate));
             found += 1;
           });
           if (!search.pageInfo || !search.pageInfo.hasNextPage || search.edges.length < 40) break;
           offset += search.edges.length;
           await sleep(500);
         }
-        console.log(`[${index + 1}/${queue.length}] ${city}: ${found}`);
+        console.log(`${day} [${index + 1}/${queue.length}] ${city}: ${found}`);
       } catch (error) {
-        failed.push({ city, error: error.message });
-        console.error(`${city}: ${error.message}`);
+        failed.push({ date: day, city, error: error.message });
+        console.error(`${day} ${city}: ${error.message}`);
       }
       await sleep(500);
+    }
     }
     if (dump) return;
     const output = {
       generatedAt: new Date().toISOString(),
-      checkIn: isoDate(checkIn),
-      checkOut: isoDate(checkOut),
+      dates: dates.map(isoDate),
       source: "marriott.com.cn official search, standard redemption (MRW)",
       hotels: records
     };
@@ -227,7 +249,7 @@ function readRates(rates) {
         JSON.stringify(output) +
         ";\n})(typeof window !== \"undefined\" ? window : globalThis);\n"
     );
-    console.log(JSON.stringify({ hotels: Object.keys(records).length, cities: queue.length, failed: failed.length }, null, 2));
+    console.log(JSON.stringify({ hotels: Object.keys(records).length, dates: output.dates, cities: queue.length, failed }, null, 2));
   } catch (error) {
     console.error(error.stack || error);
     process.exitCode = 1;

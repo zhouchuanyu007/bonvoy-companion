@@ -5483,6 +5483,9 @@ img[hidden] { display: none; }
 .ledger-line.is-credit strong { color: var(--sage); }
 .ledger-line.is-total { border-top: 1px solid var(--ink); font-size: 14px; font-weight: 700; }
 .ledger-line.is-muted span, .ledger-line.is-muted strong { color: var(--muted); }
+.ledger-line.is-pick span { font-weight: 700; }
+.ledger-line.is-pick strong { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.ledger-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .value-more { margin-top: 16px; }
 .value-figures { grid-template-columns: repeat(3, auto); }
 .value-award strong { color: var(--ink); }

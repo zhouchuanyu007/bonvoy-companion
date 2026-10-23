@@ -215,6 +215,23 @@ assert.equal(award.points, 25000);
 assert.equal(Math.round(award.valuePer10k), 500, "1250 / 25000 * 10000 = 500");
 assert.ok(award.versusPrefs > 1, "Above user valuation means points win");
 assert.equal(LOGIC.awardRedemption({ id: "none" }, {}), null);
+// Multi-night samples: the median night drives the value, not a skewed weekend.
+globalThis.APP_AWARD_POINTS.hotels.multi = {
+  samples: [
+    { date: "2026-11-07", points: 23500, cashTotal: 1661.55, available: true },
+    { date: "2026-11-10", points: 21500, cashTotal: 654.13, available: true },
+    { date: "2026-11-21", points: 21500, cashTotal: 700, available: true },
+    { date: "2026-11-24", points: 21500, cashTotal: 600, available: false }
+  ]
+};
+const multi = LOGIC.awardRedemption({ id: "multi" }, { pointValue: 400 });
+assert.equal(multi.sampleCount, 4);
+assert.equal(multi.pricedCount, 3, "Nights without award availability are not priced");
+assert.equal(multi.checkIn, "2026-11-21", "Median of three priced nights");
+assert.equal(Math.round(multi.valuePer10k), 326, "700 / 21500 * 10000");
+assert.equal(Math.round(multi.minValue), 304);
+assert.equal(Math.round(multi.best.valuePer10k), 707);
+delete globalThis.APP_AWARD_POINTS.hotels.multi;
 globalThis.APP_AWARD_POINTS.hotels.tw = { points: 20000, cashTotal: 10000, available: true };
 const twAward = LOGIC.awardRedemption({ id: "tw", provinceFull: "台湾省" }, { pointValue: 400 });
 assert.equal(twAward.currency, "TWD");
