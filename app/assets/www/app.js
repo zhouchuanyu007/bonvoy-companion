@@ -5262,7 +5262,7 @@
         ? line("闪促赠分", minus(cost.bonusValue), cost.bonusPoints.toLocaleString("zh-CN") + " 分", "is-credit")
         : line("闪促赠分", "¥0", "未取得活动数据")) +
       line("净成本", esc(money(cost.netCost)), "", "is-total") +
-      awardLedger(item.award, line) +
+      awardLedger(item.award, line, cost.cost) +
       '</div><div class="ledger-col"><h4>幸福度 ' +
       item.happinessScore.toFixed(1) +
       "</h4>" +
@@ -5323,7 +5323,7 @@
     );
   }
 
-  function awardLedger(award, line) {
+  function awardLedger(award, line, listCost) {
     if (!award) {
       return (
         '<h4 class="ledger-sub">积分兑换</h4>' +
@@ -5349,6 +5349,9 @@
             "同日现金价",
             esc(money(award.cash)),
             "含税，与积分价同一晚" +
+              (listCost && Math.abs(award.cash - listCost) / listCost > 0.05
+                ? " · 与上方房价 " + money(listCost) + " 不是同一天的报价"
+                : "") +
               (award.currency !== "CNY"
                 ? " · 原价 " + award.currency + " " + Math.round(award.cashLocal).toLocaleString("zh-CN") + "，估算汇率"
                 : "")
@@ -5358,7 +5361,11 @@
         ? line(
             "兑换价值",
             "每万分 " + esc(money(award.valuePer10k)),
-            "现金价 ÷ 积分 × 10,000 · " + verdict,
+            money(award.cash) +
+              " ÷ " +
+              award.points.toLocaleString("zh-CN") +
+              " 分 × 10,000 · " +
+              verdict,
             award.versusPrefs >= 1 ? "is-credit is-total" : "is-total"
           )
         : award.suspect
