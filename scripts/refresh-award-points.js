@@ -24,6 +24,9 @@ const args = process.argv.slice(2);
 const limitIndex = args.indexOf("--limit");
 const destinationLimit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : Infinity;
 const dateArg = args.find((arg) => /^\d{4}-\d{2}-\d{2}$/.test(arg));
+// --dump CITY HOTEL_ID prints that hotel's raw rates and writes nothing.
+const dumpIndex = args.indexOf("--dump");
+const dump = dumpIndex >= 0 ? { city: args[dumpIndex + 1], id: args[dumpIndex + 2] } : null;
 
 if (!profileDir.startsWith(researchDir + path.sep)) throw new Error("浏览器临时目录越界");
 fs.mkdirSync(researchDir, { recursive: true });
@@ -182,7 +185,7 @@ function readRates(rates) {
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
     const template = await captureTemplate(cdp, checkIn, checkOut);
-    const queue = cities.slice(0, destinationLimit);
+    const queue = dump ? [dump.city] : cities.slice(0, destinationLimit);
     for (const [index, city] of queue.entries()) {
       try {
         let offset = 0;
@@ -192,6 +195,7 @@ function readRates(rates) {
           if (!search || !Array.isArray(search.edges)) throw new Error("返回缺少搜索数据");
           search.edges.forEach((edge) => {
             const id = edge && edge.node && edge.node.property && edge.node.property.id;
+            if (dump && id === dump.id) console.log(JSON.stringify(edge.node.rates, null, 1));
             if (!id || !hotelIds.has(id) || records[id]) return;
             const rate = readRates(edge.node.rates);
             if (!rate.points) return;
@@ -209,6 +213,7 @@ function readRates(rates) {
       }
       await sleep(500);
     }
+    if (dump) return;
     const output = {
       generatedAt: new Date().toISOString(),
       checkIn: isoDate(checkIn),
