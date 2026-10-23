@@ -369,6 +369,356 @@
       }));
   }
 
+  // ---------------------------------------------------------------------------
+  // Happiness value ranking: what one night really costs after discounts and
+  // points, set against how good the stay is likely to feel.
+  // ---------------------------------------------------------------------------
+
+  const VALUE_DEFAULTS = {
+    pointValue: 400, // CNY per 10,000 Marriott Bonvoy points
+    tier: "member",
+    discountPct: 0
+  };
+
+  // Marriott Bonvoy Terms 2.1.a / 5.3.b: base earn per USD and elite bonus.
+  const ELITE_TIERS = [
+    { id: "member", label: "会员", bonus: 0 },
+    { id: "silver", label: "银卡", bonus: 0.1 },
+    { id: "gold", label: "金卡", bonus: 0.25 },
+    { id: "platinum", label: "白金", bonus: 0.5 },
+    { id: "titanium", label: "钛金+", bonus: 0.75 }
+  ];
+  const REDUCED_EARN_BRANDS = new Set(["EL", "ER", "BA", "RI", "TS"]);
+  const USD_CNY = 7.1;
+  const ASSUMED_TAX_RATE = 0.166;
+
+  const HAPPINESS_WEIGHTS = { rating: 45, view: 20, breakfast: 20, gym: 15 };
+  const VIEW_SCORES = {
+    海景: 1,
+    湖景: 1,
+    江景: 0.9,
+    雪山景: 0.9,
+    河景: 0.75,
+    山景: 0.75,
+    地标景: 0.7,
+    园景: 0.5,
+    泳池景: 0.45,
+    城景: 0.3
+  };
+  const UNKNOWN_SIGNAL = 0.4;
+
+  const SEASONS = [
+    { id: "spring", label: "春", months: [3, 4, 5] },
+    { id: "summer", label: "夏", months: [6, 7, 8] },
+    { id: "autumn", label: "秋", months: [9, 10, 11] },
+    { id: "winter", label: "冬", months: [12, 1, 2] }
+  ];
+  const COOL_SUMMER_PROVINCES = new Set([
+    "云南", "贵州", "黑龙江", "吉林", "新疆", "青海", "甘肃", "西藏", "内蒙古"
+  ]);
+  const WARM_WINTER_PROVINCES = new Set(["海南"]);
+  const MILD_WINTER_PROVINCES = new Set(["云南", "广东", "广西", "福建"]);
+
+  function valueSignalsFor(hotel) {
+    const store = global.APP_VALUE_SIGNALS;
+    return (store && store.hotels && store.hotels[hotel.id]) || null;
+  }
+
+  function bonusPointsFor(hotel) {
+    const live = hotel && hotel.pointsPromotion;
+    const bundled =
+      global.APP_POINTS_PROMOTIONS &&
+      global.APP_POINTS_PROMOTIONS.hotels &&
+      global.APP_POINTS_PROMOTIONS.hotels[hotel.id];
+    const promotion = live || bundled;
+    const points = Number(promotion && promotion.bonusPoints);
+    return Number.isFinite(points) && points > 0 ? points : 0;
+  }
+
+  function normalizeValuePrefs(prefs) {
+    const merged = Object.assign({}, VALUE_DEFAULTS, prefs || {});
+    const pointValue = Number(merged.pointValue);
+    const discountPct = Number(merged.discountPct);
+    return {
+      pointValue: Number.isFinite(pointValue) ? clamp(pointValue, 0, 2000) : 400,
+      tier: ELITE_TIERS.some((tier) => tier.id === merged.tier) ? merged.tier : "member",
+      discountPct: Number.isFinite(discountPct) ? clamp(discountPct, 0, 60) : 0
+    };
+  }
+
+  // Returns null when the hotel has no usable public price. `resolveBonus`
+  // lets the app supply live flash-promo points it already knows about.
+  function netCostBreakdown(hotel, prefs, resolveBonus) {
+    const settings = normalizeValuePrefs(prefs);
+    const price = Number(hotel.price);
+    if (!Number.isFinite(price) || price <= 0) return null;
+    const total = Number(hotel.totalPrice);
+    const taxIncluded = Number.isFinite(total) && total > 0;
+    // Marriott quotes carry a pre-tax price plus a tax-inclusive total; other
+    // sources (Fliggy) quote a single tax-inclusive price.
+    const cost = taxIncluded ? total : price;
+    const preTax = taxIncluded ? price : price / (1 + ASSUMED_TAX_RATE);
+    const discount = (cost * settings.discountPct) / 100;
+    const tier = ELITE_TIERS.find((item) => item.id === settings.tier);
+    const basePerUsd = REDUCED_EARN_BRANDS.has(hotel.brandId) ? 5 : 10;
+    const earnedPoints = Math.round(
+      ((preTax * (1 - settings.discountPct / 100)) / USD_CNY) *
+        basePerUsd *
+        (1 + tier.bonus)
+    );
+    const earnedValue = (earnedPoints / 10000) * settings.pointValue;
+    const resolved = typeof resolveBonus === "function" ? Number(resolveBonus(hotel)) : 0;
+    const bonusPoints = Number.isFinite(resolved) && resolved > 0 ? resolved : bonusPointsFor(hotel);
+    const bonusValue = (bonusPoints / 10000) * settings.pointValue;
+    const netCost = Math.max(1, cost - discount - earnedValue - bonusValue);
+    return {
+      cost,
+      taxIncluded,
+      discount,
+      earnedPoints,
+      earnedValue,
+      bonusPoints,
+      bonusValue,
+      netCost,
+      basePerUsd,
+      tierLabel: tier.label,
+      discountPct: settings.discountPct,
+      pointValue: settings.pointValue
+    };
+  }
+
+  function breakfastScore(breakfast) {
+    if (!breakfast) return { score: UNKNOWN_SIGNAL, label: "早餐待核实", known: false };
+    if (breakfast.type === "none") return { score: 0, label: "不提供早餐", known: true };
+    if (breakfast.type === "buffet") {
+      const cuisines = clamp(breakfast.cuisines || 1, 1, 4);
+      const priceBoost = breakfast.price >= 200 ? 0.15 : breakfast.price >= 120 ? 0.08 : 0;
+      return {
+        score: clamp(0.55 + cuisines * 0.075 + priceBoost, 0, 1),
+        label: "自助早餐" + (cuisines > 1 ? " · " + cuisines + " 类菜系" : ""),
+        known: true
+      };
+    }
+    if (breakfast.type === "set") return { score: 0.4, label: "套餐早餐", known: true };
+    if (breakfast.type === "alacarte") return { score: 0.35, label: "单点早餐", known: true };
+    return { score: 0.35, label: "早餐形式未注明", known: true };
+  }
+
+  function happinessBreakdown(hotel) {
+    const signal = valueSignalsFor(hotel);
+    const quality = Number(hotel.quality);
+    const ratingScore = Number.isFinite(quality) ? clamp((quality - 7) / 2.6, 0, 1) : 0;
+    const view = signal && signal.view ? signal.view : "";
+    const viewScore = view ? VIEW_SCORES[view] || 0.3 : UNKNOWN_SIGNAL;
+    const breakfast = breakfastScore(signal && signal.breakfast);
+    const gymKnown = Boolean(signal);
+    const gymScore = gymKnown ? (signal.gym ? 1 : 0) : UNKNOWN_SIGNAL;
+    const parts = [
+      {
+        id: "rating",
+        label: "酒店评分",
+        detail: Number.isFinite(quality) ? quality.toFixed(1) + " / 10" : "暂无评分",
+        score: ratingScore,
+        weight: HAPPINESS_WEIGHTS.rating,
+        known: Number.isFinite(quality)
+      },
+      {
+        id: "view",
+        label: "风景",
+        detail: view ? view + (signal.viewInName ? "房型" : "") : "景观待核实",
+        score: viewScore,
+        weight: HAPPINESS_WEIGHTS.view,
+        known: Boolean(view)
+      },
+      {
+        id: "breakfast",
+        label: "早餐丰盛度",
+        detail: breakfast.label,
+        score: breakfast.score,
+        weight: HAPPINESS_WEIGHTS.breakfast,
+        known: breakfast.known
+      },
+      {
+        id: "gym",
+        label: "健身房",
+        detail: gymKnown ? (signal.gym ? "有健身房" : "未列出健身房") : "设施待核实",
+        score: gymScore,
+        weight: HAPPINESS_WEIGHTS.gym,
+        known: gymKnown
+      }
+    ];
+    parts.forEach((part) => {
+      part.points = Math.round(part.score * part.weight * 10) / 10;
+    });
+    const total = parts.reduce((sum, part) => sum + part.score * part.weight, 0);
+    return {
+      score: Math.round(total * 10) / 10,
+      parts,
+      complete: parts.every((part) => part.known),
+      signal
+    };
+  }
+
+  function seasonForMonth(month) {
+    return SEASONS.find((season) => season.months.includes(Number(month))) || SEASONS[0];
+  }
+
+  function provinceKey(hotel) {
+    return cleanProvince(hotel.province || "");
+  }
+
+  function cleanProvince(value) {
+    return String(value).replace(/壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区|省|市/g, "");
+  }
+
+  // Seasonal fit in [0, 1] with a short reason; 0 means not a seasonal pick.
+  function seasonFit(hotel, seasonId, month) {
+    const season = SEASONS.find((item) => item.id === seasonId);
+    if (!season) return { score: 0, reason: "" };
+    const signal = valueSignalsFor(hotel) || {};
+    const features = new Set(signal.features || []);
+    const province = provinceKey(hotel);
+    const destination = getDestination(hotel.destinationId);
+    const seasonMonths = (destination && destination.seasonMonths) || [];
+    const inDestinationSeason = season.months.some((item) =>
+      seasonMonths.includes(item)
+    );
+    const candidates = [];
+    if (inDestinationSeason && destination.seasonLabel) {
+      candidates.push({ score: 1, reason: destination.seasonLabel });
+    }
+    if (season.id === "winter") {
+      if (features.has("spring")) candidates.push({ score: 1, reason: "冬季泡温泉" });
+      if (features.has("ski")) candidates.push({ score: 1, reason: "雪季近滑雪场" });
+      if (WARM_WINTER_PROVINCES.has(province)) {
+        candidates.push({ score: 1, reason: "冬季避寒" });
+      } else if (MILD_WINTER_PROVINCES.has(province) && features.has("beach")) {
+        candidates.push({ score: 0.65, reason: "南方暖冬海景" });
+      } else if (province === "云南") {
+        candidates.push({ score: 0.6, reason: "春城暖冬" });
+      }
+    } else if (season.id === "summer") {
+      if (features.has("beach")) candidates.push({ score: 1, reason: "夏季海滨" });
+      if (COOL_SUMMER_PROVINCES.has(province)) {
+        candidates.push({ score: 0.9, reason: "夏季避暑" });
+      }
+      if (features.has("mountain") || features.has("lake")) {
+        candidates.push({ score: 0.6, reason: "山湖消暑" });
+      }
+    } else if (season.id === "autumn") {
+      if (features.has("mountain") || features.has("lake")) {
+        candidates.push({ score: 0.75, reason: "秋季山湖景观" });
+      }
+      if (["新疆", "内蒙古", "甘肃", "四川", "吉林"].includes(province)) {
+        candidates.push({ score: 0.6, reason: "秋色正当季" });
+      }
+      if (features.has("spring") && Number(month) === 11) {
+        candidates.push({ score: 0.6, reason: "深秋温泉" });
+      }
+    } else if (season.id === "spring") {
+      if (features.has("lake") || signal.view === "园景") {
+        candidates.push({ score: 0.7, reason: "春季湖景园林" });
+      }
+      if (["浙江", "江苏", "云南"].includes(province)) {
+        candidates.push({ score: 0.5, reason: "春季出游舒适" });
+      }
+    }
+    return candidates.sort((a, b) => b.score - a.score)[0] || { score: 0, reason: "" };
+  }
+
+  function matchesScope(hotel, scope) {
+    if (!scope || scope === "all") return true;
+    if (scope.startsWith("region:")) return hotel.region === scope.slice(7);
+    if (scope.startsWith("city:")) return hotel.city === scope.slice(5);
+    return true;
+  }
+
+  function evaluateHotelValue(hotel, options) {
+    const cost = netCostBreakdown(hotel, options.prefs, options.bonusPointsFor);
+    if (!cost) return null;
+    const happiness = happinessBreakdown(hotel);
+    const season = options.season && options.season !== "all"
+      ? seasonFit(hotel, options.season, options.month)
+      : { score: 0, reason: "" };
+    const seasonBonus = Math.round(season.score * 12 * 10) / 10;
+    const happinessScore = Math.min(100, happiness.score + seasonBonus);
+    return {
+      hotel,
+      destination: getDestination(hotel.destinationId),
+      cost,
+      happiness,
+      season,
+      seasonBonus,
+      happinessScore,
+      // Happiness points bought per 1,000 CNY of real nightly cost.
+      valuePerThousand: (happinessScore / cost.netCost) * 1000
+    };
+  }
+
+  function getHappinessRanking(options) {
+    const settings = Object.assign(
+      { scope: "all", band: "all", brand: "all", season: "all", sort: "value", limit: 20 },
+      options || {}
+    );
+    const band =
+      DATA.priceBands.find((item) => item.id === settings.band) || DATA.priceBands[0];
+    let unrated = 0;
+    let unpriced = 0;
+    const pool = [];
+    DATA.hotels.forEach((hotel) => {
+      if (!matchesScope(hotel, settings.scope)) return;
+      if (settings.brand !== "all" && hotel.brand !== settings.brand) return;
+      if (!Number.isFinite(Number(hotel.quality))) {
+        unrated += 1;
+        return;
+      }
+      const item = evaluateHotelValue(hotel, settings);
+      if (!item) {
+        unpriced += 1;
+        return;
+      }
+      if (settings.season !== "all" && item.season.score <= 0) return;
+      if (
+        settings.band !== "all" &&
+        (item.cost.netCost < band.min || item.cost.netCost > band.max)
+      ) {
+        return;
+      }
+      pool.push(item);
+    });
+    const sorters = {
+      value: (a, b) => b.valuePerThousand - a.valuePerThousand,
+      happiness: (a, b) =>
+        b.happinessScore - a.happinessScore || a.cost.netCost - b.cost.netCost,
+      cost: (a, b) => a.cost.netCost - b.cost.netCost || b.happinessScore - a.happinessScore
+    };
+    pool.sort(sorters[settings.sort] || sorters.value);
+    const bestValue = pool.reduce((max, item) => Math.max(max, item.valuePerThousand), 0) || 1;
+    const items = pool.slice(0, settings.limit).map((item, index) =>
+      Object.assign(item, {
+        rank: index + 1,
+        relativeValue: Math.round((item.valuePerThousand / bestValue) * 1000) / 10
+      })
+    );
+    return { items, candidates: pool.length, unrated, unpriced, all: pool };
+  }
+
+  // One winner per net-cost band within the current scope.
+  function bandChampions(options) {
+    // Score the scope once, then bucket by net cost.
+    const pool = getHappinessRanking(
+      Object.assign({}, options, { band: "all", sort: "value", limit: 0 })
+    ).all;
+    return DATA.priceBands
+      .filter((band) => band.id !== "all")
+      .map((band) => {
+        const inBand = pool.filter(
+          (item) => item.cost.netCost >= band.min && item.cost.netCost <= band.max
+        );
+        return { band, item: inBand[0] || null, candidates: inBand.length };
+      });
+  }
+
   function splitEvidence(text) {
     return text
       .replace(/\r/g, "")
@@ -500,6 +850,17 @@
     parseQuery,
     getRankedHotels,
     valueIndex,
+    VALUE_DEFAULTS,
+    ELITE_TIERS,
+    SEASONS,
+    HAPPINESS_WEIGHTS,
+    netCostBreakdown,
+    happinessBreakdown,
+    seasonForMonth,
+    seasonFit,
+    evaluateHotelValue,
+    getHappinessRanking,
+    bandChampions,
     getManagementCounts,
     managementSummary,
     seasonStatus,

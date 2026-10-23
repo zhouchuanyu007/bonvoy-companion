@@ -1303,6 +1303,11 @@
 
   const savedPrefs = Object.assign({}, DEFAULT_PREFS, safeRead("lvban.prefs.v1", {}));
   let prefs = Object.assign({}, savedPrefs);
+  let valuePrefs = Object.assign(
+    {},
+    LOGIC.VALUE_DEFAULTS,
+    safeRead("lvban.valuePrefs.v1", {})
+  );
   let favorites = new Set(
     safeRead("lvban.favorites.v1", []).filter((id) => Boolean(LOGIC.getHotel(id)))
   );
@@ -1374,6 +1379,12 @@
     rankBand: "all",
     rankBrand: "all",
     rankRegion: "全国",
+    rankScope: "all",
+    rankSeason: "all",
+    rankSort: "value",
+    rankLimit: 20,
+    rankExpandedId: null,
+    rankSettingsOpen: false,
     tripTab: "planner",
     hotelInsightLoadingId: null,
     hotelInsightError: "",
@@ -1934,7 +1945,12 @@
       mapCheckIn: state.mapCheckIn,
       mapZoom: state.mapZoom,
       mapCenter: state.mapCenter,
-      mapViewCity: state.mapViewCity
+      mapViewCity: state.mapViewCity,
+      rankScope: state.rankScope,
+      rankBand: state.rankBand,
+      rankBrand: state.rankBrand,
+      rankSeason: state.rankSeason,
+      rankSort: state.rankSort
     };
   }
 
@@ -1979,6 +1995,13 @@
       state.directoryRegion = payload.directoryRegion || "全国";
       state.directoryBrand = payload.directoryBrand || "all";
       state.directoryLimit = Number(payload.directoryLimit) || 24;
+      state.rankScope = payload.rankScope || "all";
+      state.rankBand = payload.rankBand || "all";
+      state.rankBrand = payload.rankBrand || "all";
+      state.rankSeason = payload.rankSeason || "all";
+      state.rankSort = payload.rankSort || "value";
+      state.rankLimit = 20;
+      state.rankExpandedId = null;
       state.mapCity = payload.mapCity || state.mapCity;
       state.mapBand = payload.mapBand || "all";
       state.mapManagement = payload.mapManagement || "all";
@@ -5105,137 +5128,325 @@
       .join("");
   }
 
-  function renderRankingsV2() {
-    const ranking = LOGIC.getRankedHotels({
-      mode: state.rankMode,
-      band: state.rankBand,
-      brand: state.rankBrand,
-      region: state.rankRegion
+  function valueRankingOptions(overrides) {
+    return Object.assign(
+      {
+        scope: state.rankScope,
+        band: state.rankBand,
+        brand: state.rankBrand,
+        season: state.rankSeason,
+        month: new Date().getMonth() + 1,
+        sort: state.rankSort,
+        limit: state.rankLimit,
+        prefs: valuePrefs,
+        bonusPointsFor: (hotel) => {
+          const promotion = pointsPromotionForHotel(hotel);
+          return promotion ? promotion.bonusPoints : 0;
+        }
+      },
+      overrides || {}
+    );
+  }
+
+  function rankScopeOptions() {
+    const cityCounts = {};
+    DATA.hotels.forEach((hotel) => {
+      if (hotel.city) cityCounts[hotel.city] = (cityCounts[hotel.city] || 0) + 1;
     });
-    const isQuality = state.rankMode === "quality";
     const regionCounts = DATA.catalogMeta.regionCounts || {};
-    const priceText = (hotel) => (hasPrice(hotel) ? money(hotel.price) : "查价");
+    const regions = DATA.regions
+      .filter((region) => region !== "全国")
+      .map((region) => ({
+        value: "region:" + region,
+        label: region + " · " + (regionCounts[region] || 0) + " 家"
+      }));
+    const cities = Object.keys(cityCounts)
+      .filter((city) => cityCounts[city] >= 2)
+      .sort((a, b) => cityCounts[b] - cityCounts[a] || a.localeCompare(b, "zh-CN"))
+      .map((city) => ({ value: "city:" + city, label: city + " · " + cityCounts[city] + " 家" }));
+    const option = (item) =>
+      '<option value="' +
+      esc(item.value) +
+      '"' +
+      (state.rankScope === item.value ? " selected" : "") +
+      ">" +
+      esc(item.label) +
+      "</option>";
     return (
-      '<div class="screen">' +
-      '<section class="rank-header">' +
-      '<span class="eyebrow" style="position:relative;z-index:1">Regional quality ledger</span>' +
-      "<h1>分地区酒店榜</h1>" +
-      "<p>按万豪子品牌、地区和价位筛选。质量和性价比分开计算，不用单日特价定义长期价值。</p>" +
-      "</section>" +
-      '<div class="segmented">' +
-      '<button class="' +
-      (isQuality ? "is-active" : "") +
-      '" data-action="set-rank-mode" data-id="quality">质量 Top 10</button>' +
-      '<button class="' +
-      (!isQuality ? "is-active" : "") +
-      '" data-action="set-rank-mode" data-id="value">性价比 Top 10</button>' +
-      "</div>" +
-      '<div class="region-tabs">' +
-      DATA.regions
-        .map((region) => {
-          return (
-            '<button class="region-tab ' +
-            (state.rankRegion === region ? "is-active" : "") +
-            '" data-action="set-rank-region" data-id="' +
-            esc(region) +
-            '">' +
-            esc(region) +
-            '<small>' +
-            (region === "全国"
-              ? (DATA.hotels.length + " 家")
-              : (regionCounts[region] || 0) + " 家") +
-            "</small></button>"
-          );
-        })
+      option({ value: "all", label: "全国 · " + DATA.hotels.length + " 家" }) +
+      '<optgroup label="地区">' + regions.map(option).join("") + "</optgroup>" +
+      '<optgroup label="城市">' + cities.map(option).join("") + "</optgroup>"
+    );
+  }
+
+  function rankScopeLabel() {
+    if (state.rankScope === "all") return "全国";
+    return state.rankScope.replace(/^(region|city):/, "");
+  }
+
+  function rankBrandSelectOptions() {
+    return (
+      '<option value="all"' +
+      (state.rankBrand === "all" ? " selected" : "") +
+      ">全部品牌</option>" +
+      rankBrandOptions()
+    );
+  }
+
+  function valueSegment(action, current, items) {
+    return items
+      .map(
+        (item) =>
+          '<button type="button" class="' +
+          (current === item.id ? "is-active" : "") +
+          '" data-action="' +
+          action +
+          '" data-id="' +
+          esc(item.id) +
+          '" aria-pressed="' +
+          (current === item.id ? "true" : "false") +
+          '">' +
+          esc(item.label) +
+          "</button>"
+      )
+      .join("");
+  }
+
+  function happinessChips(item) {
+    return item.happiness.parts
+      .map((part) => {
+        const tone = !part.known ? "is-unknown" : part.score >= 0.75 ? "is-strong" : part.score <= 0.15 ? "is-weak" : "";
+        return (
+          '<span class="value-chip ' +
+          tone +
+          '" title="' +
+          esc(part.label + "：" + part.detail + "，" + part.points + " / " + part.weight + " 分") +
+          '">' +
+          esc(part.detail) +
+          "</span>"
+        );
+      })
+      .join("");
+  }
+
+  function valueLedger(item) {
+    const cost = item.cost;
+    const line = (label, value, note, tone) =>
+      '<div class="ledger-line ' +
+      (tone || "") +
+      '"><span>' +
+      esc(label) +
+      (note ? "<em>" + esc(note) + "</em>" : "") +
+      "</span><strong>" +
+      value +
+      "</strong></div>";
+    const minus = (value) => "−" + esc(money(value));
+    return (
+      '<div class="value-ledger"><div class="ledger-col"><h4>一晚真实成本</h4>' +
+      line("房价", esc(money(cost.cost)), cost.taxIncluded ? "含税" : "公开价，按含税处理") +
+      (cost.discount > 0
+        ? line("折扣", minus(cost.discount), cost.discountPct + "%", "is-credit")
+        : "") +
+      line(
+        "入住积分回血",
+        minus(cost.earnedValue),
+        cost.earnedPoints.toLocaleString("zh-CN") + " 分 · " + cost.tierLabel + " · " + cost.basePerUsd + " 分/美元",
+        "is-credit"
+      ) +
+      (cost.bonusPoints > 0
+        ? line("闪促赠分", minus(cost.bonusValue), cost.bonusPoints.toLocaleString("zh-CN") + " 分", "is-credit")
+        : line("闪促赠分", "¥0", "未取得活动数据")) +
+      line("净成本", esc(money(cost.netCost)), "", "is-total") +
+      '</div><div class="ledger-col"><h4>幸福度 ' +
+      item.happinessScore.toFixed(1) +
+      "</h4>" +
+      item.happiness.parts
+        .map((part) =>
+          line(part.label, part.points.toFixed(1) + '<small> / ' + part.weight + "</small>", part.detail, part.known ? "" : "is-muted")
+        )
         .join("") +
-      "</div>" +
-      '<div class="filter-row" style="margin-top:12px">' +
+      (item.seasonBonus > 0
+        ? line("季节加成", "+" + item.seasonBonus.toFixed(1), item.season.reason, "is-credit")
+        : "") +
+      "</div></div>"
+    );
+  }
+
+  function valueRow(item) {
+    const hotel = item.hotel;
+    const expanded = state.rankExpandedId === hotel.id;
+    return (
+      '<article class="value-row' +
+      (expanded ? " is-expanded" : "") +
+      '"><span class="value-rank">' +
+      item.rank +
+      '</span><div class="value-main"><button type="button" class="value-name" data-action="view-hotel" data-id="' +
+      esc(hotel.id) +
+      '">' +
+      esc(hotel.name) +
+      '</button><p class="value-meta">' +
+      esc(hotel.brand) +
+      " · " +
+      esc(hotel.city || (item.destination && item.destination.name) || "") +
+      (item.season.reason ? ' · <span class="value-season">' + esc(item.season.reason) + "</span>" : "") +
+      '</p><div class="value-chips">' +
+      happinessChips(item) +
+      '</div></div><div class="value-figures"><div><span>净成本</span><strong>' +
+      esc(money(item.cost.netCost)) +
+      '</strong><em>房价 ' +
+      esc(money(item.cost.cost)) +
+      '</em></div><div><span>幸福度</span><strong>' +
+      item.happinessScore.toFixed(1) +
+      '</strong><em>每千元 ' +
+      item.valuePerThousand.toFixed(0) +
+      '</em></div></div><button type="button" class="value-toggle" data-action="toggle-rank-ledger" data-id="' +
+      esc(hotel.id) +
+      '" aria-expanded="' +
+      (expanded ? "true" : "false") +
+      '" aria-label="' +
+      (expanded ? "收起成本明细" : "展开成本明细") +
+      '" title="成本与幸福度明细">' +
+      icon("calculator") +
+      "</button>" +
+      (expanded ? valueLedger(item) : "") +
+      "</article>"
+    );
+  }
+
+  function renderRankingsV2() {
+    const options = valueRankingOptions();
+    const result = LOGIC.getHappinessRanking(options);
+    const champions =
+      state.rankBand === "all" ? LOGIC.bandChampions(valueRankingOptions({ limit: 1 })) : [];
+    const seasonItems = [{ id: "all", label: "全年" }].concat(
+      LOGIC.SEASONS.map((season) => ({ id: season.id, label: season.label }))
+    );
+    const sortItems = [
+      { id: "value", label: "性价比" },
+      { id: "happiness", label: "幸福度" },
+      { id: "cost", label: "净成本" }
+    ];
+    const tierItems = LOGIC.ELITE_TIERS.map((tier) => ({ id: tier.id, label: tier.label }));
+    const currentSeason = LOGIC.seasonForMonth(new Date().getMonth() + 1);
+    const bandLabel = (DATA.priceBands.find((band) => band.id === state.rankBand) || {}).label || "全部价位";
+    const title =
+      rankScopeLabel() +
+      (state.rankBrand === "all" ? "" : " · " + state.rankBrand) +
+      (state.rankSeason === "all"
+        ? ""
+        : " · " + (LOGIC.SEASONS.find((season) => season.id === state.rankSeason) || {}).label + "季推荐");
+    return (
+      '<div class="screen value-screen">' +
+      '<header class="value-header"><div><span class="eyebrow">Happiness per yuan</span><h1>幸福度性价比榜</h1></div>' +
+      '<button type="button" class="icon-button" data-action="toggle-value-settings" aria-expanded="' +
+      (state.rankSettingsOpen ? "true" : "false") +
+      '" aria-label="积分与折扣口径" title="积分与折扣口径">' +
+      icon("settings") +
+      "</button></header>" +
+      (state.rankSettingsOpen
+        ? '<section class="value-settings" aria-label="积分与折扣口径">' +
+          '<label class="value-field"><span>每万分价值</span><div class="value-input"><b>¥</b><input id="value-point-value" type="number" inputmode="numeric" min="0" max="2000" step="10" value="' +
+          esc(valuePrefs.pointValue) +
+          '" /></div></label>' +
+          '<label class="value-field"><span>额外折扣</span><div class="value-input"><input id="value-discount" type="number" inputmode="numeric" min="0" max="60" step="1" value="' +
+          esc(valuePrefs.discountPct) +
+          '" /><b>%</b></div></label>' +
+          '<div class="value-field value-field-wide"><span>会员等级</span><div class="segmented value-tiers">' +
+          valueSegment("set-value-tier", valuePrefs.tier, tierItems) +
+          "</div></div></section>"
+        : "") +
+      '<section class="value-controls" aria-label="榜单筛选">' +
+      '<label class="value-select"><span>范围</span><select id="rank-scope">' +
+      rankScopeOptions() +
+      "</select></label>" +
+      '<label class="value-select"><span>品牌</span><select id="rank-brand">' +
+      rankBrandSelectOptions() +
+      "</select></label>" +
+      '<div class="value-select value-select-wide"><span>季节</span><div class="segmented value-segmented">' +
+      valueSegment("set-rank-season", state.rankSeason, seasonItems) +
+      "</div></div>" +
+      '<div class="value-select value-select-wide"><span>净成本价位</span><div class="filter-row value-bands">' +
       DATA.priceBands
-        .map((band) => {
-          return (
-            '<button class="filter-chip ' +
+        .map(
+          (band) =>
+            '<button type="button" class="filter-chip ' +
             (state.rankBand === band.id ? "is-active" : "") +
             '" data-action="set-rank-band" data-id="' +
             band.id +
             '">' +
             esc(band.label) +
             "</button>"
-          );
-        })
+        )
         .join("") +
-      "</div>" +
-      '<div class="filter-row brand-filter-row" style="margin-top:10px">' +
-      '<button class="filter-chip ' +
-      (state.rankBrand === "all" ? "is-active" : "") +
-      '" data-action="set-rank-brand" data-id="all">全部品牌</button>' +
-      rankBrandChips() +
-      "</div>" +
-      '<section class="section">' +
-      '<div class="section-head"><div><h2>' +
-      esc(state.rankRegion) +
-      " · " +
-      (isQuality ? "质量榜" : "性价比榜") +
-      (state.rankBrand === "all" ? "" : " · " + esc(state.rankBrand)) +
-      "</h2><p>" +
-      ranking.length +
-      " 家符合当前条件 · " +
-      esc((DATA.priceBands.find((band) => band.id === state.rankBand) || {}).label || "全部价位") +
-      " · 官方评分口径</p></div><span class=\"micro muted\">Top " +
-      ranking.length +
-      "</span></div>" +
-      (ranking.length
-        ? '<div class="ranking-list">' +
-          ranking
-            .map((item) => {
-              const percent = Math.max(
-                4,
-                Math.min(100, (Number(item.displayScore) / 10) * 100)
-              );
-              return (
-                '<article class="ranking-row"><span class="rank-number">' +
-                item.rank +
-                '</span><div class="ranking-copy"><strong>' +
-                esc(item.hotel.name) +
-                "</strong><p>" +
-                esc(item.hotel.brand) +
-                " · " +
-                esc(item.destination ? item.destination.name : item.hotel.city) +
-                " · 评分 " +
-                (item.hotel.rating ? item.hotel.rating.toFixed(1) : "待补充") +
-                (item.hotel.reviewCount ? "（" + item.hotel.reviewCount + "条）" : "") +
-                "</p>" +
-                '<div class="score-line"><div class="score-track"><div class="score-fill" style="width:' +
-                percent.toFixed(1) +
-                '%"></div></div><span class="score-value">' +
-                item.displayScore.toFixed(1) +
-                "</span></div></div>" +
-                '<div class="ranking-price"><strong>' +
-                priceText(item.hotel) +
-                "</strong><span>" +
-                (hasPrice(item.hotel) ? "含税 / 晚" : "官方查价") +
-                "</span><br />" +
-                '<button class="section-link" style="margin-top:7px" data-action="view-hotel" data-id="' +
-                esc(item.hotel.id) +
-                '">详情</button></div></article>'
-              );
-            })
+      "</div></div></section>" +
+      (champions.length
+        ? '<section class="value-champions" aria-label="各价位冠军"><h2>各价位冠军</h2><div class="champion-grid">' +
+          champions
+            .map((entry) =>
+              entry.item
+                ? '<button type="button" class="champion" data-action="set-rank-band" data-id="' +
+                  entry.band.id +
+                  '"><span>' +
+                  esc(entry.band.label) +
+                  "</span><strong>" +
+                  esc(entry.item.hotel.name) +
+                  "</strong><em>净 " +
+                  esc(money(entry.item.cost.netCost)) +
+                  " · 幸福 " +
+                  entry.item.happinessScore.toFixed(0) +
+                  "</em></button>"
+                : '<div class="champion is-empty"><span>' +
+                  esc(entry.band.label) +
+                  "</span><strong>暂无候选</strong><em>该范围无报价酒店</em></div>"
+            )
             .join("") +
-          "</div>"
+          "</div></section>"
+        : "") +
+      '<section class="section value-results"><div class="value-results-head"><div><h2>' +
+      esc(title) +
+      "</h2><p>" +
+      result.candidates +
+      " 家可比 · " +
+      esc(bandLabel) +
+      (result.unpriced ? " · " + result.unpriced + " 家无报价未参评" : "") +
+      '</p></div><div class="segmented value-sort" role="group" aria-label="排序">' +
+      valueSegment("set-rank-sort", state.rankSort, sortItems) +
+      "</div></div>" +
+      (result.items.length
+        ? '<div class="value-list">' +
+          result.items.map(valueRow).join("") +
+          "</div>" +
+          (result.candidates > result.items.length
+            ? '<button type="button" class="btn btn-secondary btn-block value-more" data-action="more-rank-results">再看 ' +
+              Math.min(20, result.candidates - result.items.length) +
+              " 家</button>"
+            : "")
         : emptyState(
             "当前条件没有候选",
-            isQuality
-              ? "该区域或价位暂无足够酒店。请换区域或价位查看，不以低质量结果凑满 10 家。"
-              : "性价比榜仅纳入有公开报价的酒店。先在地图中刷新城市房价，或换一个价位。",
-            "查看全国全部价位",
+            state.rankSeason !== "all"
+              ? "这个范围里没有匹配该季节的酒店。可换成全年或扩大到地区、全国。"
+              : "这个范围里没有取得公开报价的酒店，换个价位或范围试试。",
+            "重置筛选",
             "reset-rank-filters"
           )) +
       '<details class="rules-card"><summary>榜单怎么算</summary><p>' +
-      (isQuality
-        ? "质量指数采用万豪官方公开评分的五星制换算为 10 分制，并保留评价数量供交叉判断。公开评论只补充问题与场景信号。"
-        : "价值指数 = 质量指数 × 1000 ÷ 含税参考房价。只有取得当日公开报价的酒店才进入性价比榜；没有报价的酒店不会用估算价参与排名。") +
-      " 目录快照 " +
-      esc(formatDate(DATA.updatedAt)) +
-      "，价格仅为查询时点参考。</p></details>" +
+      "净成本 = 房价（含税）− 额外折扣 − 入住积分回血 − 闪促赠分。积分按每万分 ¥" +
+      esc(valuePrefs.pointValue) +
+      " 折算；回血积分按万豪会员条款计算（多数品牌每美元 10 分，源宿等长住品牌 5 分，叠加会员等级奖励），汇率按 " +
+      "7.1 估算。</p><p>幸福度满分 100：酒店评分 " +
+      LOGIC.HAPPINESS_WEIGHTS.rating +
+      "、风景 " +
+      LOGIC.HAPPINESS_WEIGHTS.view +
+      "、早餐丰盛度 " +
+      LOGIC.HAPPINESS_WEIGHTS.breakfast +
+      "、健身房 " +
+      LOGIC.HAPPINESS_WEIGHTS.gym +
+      "。风景取房型名中最好的景观，早餐看是否自助与菜系数量，资料缺失时按中性分处理并灰色标出。选择季节后，符合当季玩法的酒店另加最多 12 分。</p><p>" +
+      "性价比 = 幸福度 ÷ 净成本 × 1000，即每花 ¥1,000 买到的幸福分。现在是" +
+      esc(currentSeason.label) +
+      "季；价格为 " +
+      esc(formatDate(DATA.catalogMeta.priceSnapshot || DATA.updatedAt)) +
+      " 前后的公开快照，闪促仅计入已核实的活动。</p></details>" +
       "</section></div>"
     );
   }
@@ -7227,6 +7438,45 @@
     }
     if (action === "set-rank-band") {
       state.rankBand = id;
+      state.rankLimit = 20;
+      state.rankExpandedId = null;
+      replaceHistorySnapshot();
+      render();
+      return;
+    }
+    if (action === "set-rank-season") {
+      state.rankSeason = id;
+      state.rankLimit = 20;
+      state.rankExpandedId = null;
+      replaceHistorySnapshot();
+      render();
+      return;
+    }
+    if (action === "set-rank-sort") {
+      state.rankSort = id;
+      state.rankLimit = 20;
+      replaceHistorySnapshot();
+      render();
+      return;
+    }
+    if (action === "toggle-rank-ledger") {
+      state.rankExpandedId = state.rankExpandedId === id ? null : id;
+      render();
+      return;
+    }
+    if (action === "more-rank-results") {
+      state.rankLimit += 20;
+      render();
+      return;
+    }
+    if (action === "toggle-value-settings") {
+      state.rankSettingsOpen = !state.rankSettingsOpen;
+      render();
+      return;
+    }
+    if (action === "set-value-tier") {
+      valuePrefs.tier = id;
+      safeWrite("lvban.valuePrefs.v1", valuePrefs);
       render();
       return;
     }
@@ -7244,6 +7494,11 @@
       state.rankBand = "all";
       state.rankBrand = "all";
       state.rankRegion = "全国";
+      state.rankScope = "all";
+      state.rankSeason = "all";
+      state.rankLimit = 20;
+      state.rankExpandedId = null;
+      replaceHistorySnapshot();
       render();
       return;
     }
@@ -7399,6 +7654,26 @@
       state.directoryBrand = event.target.value;
       state.directoryLimit = 24;
       replaceHistorySnapshot();
+      render();
+      return;
+    }
+    if (event.target.id === "rank-scope" || event.target.id === "rank-brand") {
+      state[event.target.id === "rank-scope" ? "rankScope" : "rankBrand"] =
+        event.target.value || "all";
+      state.rankLimit = 20;
+      state.rankExpandedId = null;
+      replaceHistorySnapshot();
+      render();
+      return;
+    }
+    if (event.target.id === "value-point-value" || event.target.id === "value-discount") {
+      const key = event.target.id === "value-point-value" ? "pointValue" : "discountPct";
+      const max = key === "pointValue" ? 2000 : 60;
+      const number = Number(event.target.value);
+      valuePrefs[key] = Number.isFinite(number)
+        ? Math.min(max, Math.max(0, number))
+        : LOGIC.VALUE_DEFAULTS[key];
+      safeWrite("lvban.valuePrefs.v1", valuePrefs);
       render();
       return;
     }

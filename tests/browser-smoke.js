@@ -691,28 +691,28 @@ class CdpClient {
     await client.evaluate("document.querySelector('[data-nav=rankings]').click();");
     await sleep(400);
     const rankState = await client.evaluate(
-      "({rows:document.querySelectorAll('.ranking-row').length,title:document.querySelector('.rank-header h1')?.textContent})"
+      "({rows:document.querySelectorAll('.value-row').length,champions:document.querySelectorAll('.champion').length,title:document.querySelector('.value-header h1')?.textContent})"
     );
     await snap("07-rankings");
 
     await client.evaluate(
-      "document.querySelector('[data-action=set-rank-brand][data-id=\"万豪\"]').click();"
+      "(()=>{const s=document.querySelector('#rank-brand');s.value='万豪';s.dispatchEvent(new Event('change',{bubbles:true}));})()"
     );
     await sleep(250);
     const brandRankState = await client.evaluate(
-      "({active:document.querySelector('.brand-filter-row .is-active')?.textContent,rows:document.querySelectorAll('.ranking-row').length,first:document.querySelector('.ranking-copy p')?.textContent})"
+      "({active:document.querySelector('#rank-brand')?.value,rows:document.querySelectorAll('.value-row').length,first:document.querySelector('.value-meta')?.textContent})"
     );
     await client.evaluate(
-      "document.querySelector('[data-action=set-rank-brand][data-id=all]').click();"
+      "(()=>{const s=document.querySelector('#rank-brand');s.value='all';s.dispatchEvent(new Event('change',{bubbles:true}));})()"
     );
     await sleep(250);
 
     await client.evaluate(
-      "document.querySelector('[data-action=set-rank-region][data-id=\"华东\"]').click(); document.querySelector('[data-action=set-rank-mode][data-id=value]').click(); document.querySelector('[data-action=set-rank-band][data-id=\"500to900\"]').click();"
+      "(()=>{const s=document.querySelector('#rank-scope');s.value='region:华东';s.dispatchEvent(new Event('change',{bubbles:true}));})(); document.querySelector('[data-action=set-rank-season][data-id=winter]').click(); document.querySelector('[data-action=set-rank-band][data-id=\"500to900\"]').click(); document.querySelector('[data-action=toggle-rank-ledger]')?.click();"
     );
     await sleep(350);
     const valueRankState = await client.evaluate(
-      "({rows:document.querySelectorAll('.ranking-row').length,activeRegion:document.querySelector('.region-tab.is-active')?.textContent,activeMode:document.querySelector('.segmented .is-active')?.textContent,activeBand:document.querySelector('.filter-row .is-active')?.textContent})"
+      "({rows:document.querySelectorAll('.value-row').length,scope:document.querySelector('#rank-scope')?.value,activeSeason:document.querySelector('[data-action=set-rank-season].is-active')?.textContent,activeBand:document.querySelector('.value-bands .is-active')?.textContent,ledger:Boolean(document.querySelector('.value-ledger'))})"
     );
     await snap("08-value-rankings");
 

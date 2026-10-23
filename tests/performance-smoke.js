@@ -285,11 +285,11 @@ class CdpClient {
     const rankingStart = Date.now();
     await client.evaluate("document.querySelector('[data-nav=rankings]').click()");
     await sleep(500);
-    await client.evaluate("document.querySelector('[data-action=set-rank-mode][data-id=value]')?.click()");
+    await client.evaluate("document.querySelector('[data-action=set-rank-season][data-id=winter]')?.click()");
     await sleep(350);
     const rankings = await client.evaluate(`(() => ({
       route: document.querySelector('#app-main')?.dataset.route || null,
-      rows: document.querySelectorAll('.ranking-row, [data-action="view-hotel"]').length,
+      rows: document.querySelectorAll('.value-row').length,
       domNodes: document.getElementsByTagName('*').length
     }))()`);
     const rankingElapsed = Date.now() - rankingStart;

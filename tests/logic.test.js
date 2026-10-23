@@ -6,6 +6,7 @@ const path = require("node:path");
 require(path.join(__dirname, "..", "app", "assets", "www", "catalog.js"));
 require(path.join(__dirname, "..", "app", "assets", "www", "hotel-prices.js"));
 require(path.join(__dirname, "..", "app", "assets", "www", "app-data.js"));
+require(path.join(__dirname, "..", "app", "assets", "www", "hotel-value-signals.js"));
 const LOGIC = require(path.join(__dirname, "..", "app", "assets", "www", "logic.js"));
 const DATA = globalThis.APP_DATA;
 
@@ -168,6 +169,40 @@ const publicEvidenceSummary = LOGIC.summarizeEvidence(
 assert.ok(publicEvidenceSummary.text.includes("公开平台评价"));
 assert.ok(publicEvidenceSummary.text.includes("飞猪评价"));
 assert.ok(publicEvidenceSummary.text.includes("携程评价"));
+
+// Happiness value ranking
+const pricedHotel = DATA.hotels.find((hotel) => Number(hotel.totalPrice) > 0 && hotel.brandId !== "EL");
+const memberCost = LOGIC.netCostBreakdown(pricedHotel, { tier: "member" });
+const titaniumCost = LOGIC.netCostBreakdown(pricedHotel, { tier: "titanium" });
+assert.ok(memberCost.netCost < memberCost.cost, "Points earned must lower net cost");
+assert.ok(titaniumCost.earnedPoints > memberCost.earnedPoints, "Elite tiers earn more points");
+assert.ok(titaniumCost.netCost < memberCost.netCost);
+assert.equal(memberCost.basePerUsd, 10);
+const discounted = LOGIC.netCostBreakdown(pricedHotel, { discountPct: 10 });
+assert.ok(Math.abs(discounted.discount - memberCost.cost * 0.1) < 0.01);
+const bonusCost = LOGIC.netCostBreakdown(pricedHotel, {}, () => 10000);
+assert.ok(Math.abs(memberCost.netCost - bonusCost.netCost - 400) < 0.01, "10,000 points = ¥400");
+assert.equal(LOGIC.netCostBreakdown({ id: "x", price: null }, {}), null);
+const elementHotel = DATA.hotels.find((hotel) => hotel.brandId === "EL" && Number(hotel.price) > 0);
+if (elementHotel) assert.equal(LOGIC.netCostBreakdown(elementHotel, {}).basePerUsd, 5);
+
+const overall = LOGIC.getHappinessRanking({ limit: 20 });
+assert.equal(overall.items.length, 20);
+assert.ok(overall.items.every((item, index, list) => index === 0 || list[index - 1].valuePerThousand >= item.valuePerThousand));
+assert.ok(overall.items.every((item) => item.happinessScore >= 0 && item.happinessScore <= 100));
+assert.ok(overall.unpriced > 0, "Unpriced hotels must be counted, not ranked");
+const band = DATA.priceBands.find((item) => item.id !== "all");
+const banded = LOGIC.getHappinessRanking({ band: band.id, limit: 50 });
+assert.ok(banded.items.every((item) => item.cost.netCost >= band.min && item.cost.netCost <= band.max), "Bands filter on net cost");
+const cityName = overall.items[0].hotel.city;
+const cityRanking = LOGIC.getHappinessRanking({ scope: "city:" + cityName, limit: 50 });
+assert.ok(cityRanking.items.length > 0 && cityRanking.items.every((item) => item.hotel.city === cityName));
+const winter = LOGIC.getHappinessRanking({ season: "winter", month: 1, limit: 50 });
+assert.ok(winter.items.length > 0 && winter.items.every((item) => item.season.score > 0 && item.seasonBonus > 0));
+const tinyScope = LOGIC.getHappinessRanking({ scope: "city:" + cityName, brand: overall.items[0].hotel.brand, limit: 10 });
+assert.equal(tinyScope.items.length, Math.min(10, tinyScope.candidates), "Never pad rankings");
+const champions = LOGIC.bandChampions({});
+assert.equal(champions.length, DATA.priceBands.length - 1);
 
 console.log(
   JSON.stringify(
